@@ -3,7 +3,6 @@
 pub mod archetype;
 pub mod entity;
 pub mod erased;
-pub mod late_struct;
 pub mod query;
 pub mod world;
 

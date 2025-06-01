@@ -2,11 +2,11 @@ use std::{any::type_name, cell::RefCell, fmt, iter, mem, rc::Rc, slice};
 
 use derive_where::derive_where;
 use hashbrown::hash_map;
+use late_struct::{LateField, late_field};
 use thunderdome::{Arena, Index};
 
 use crate::{
     archetype::{ArchetypeId, ArchetypeStore, ComponentId},
-    late_struct::{LateField, late_field},
     utils::{FxHashMap, FxHashSet},
     world::{World, WorldDebug},
 };
@@ -145,9 +145,9 @@ pub mod component_internals {
     pub use {
         crate::{
             entity::{Component, Handle, Storage},
-            late_struct::late_field,
             world::World,
         },
+        late_struct::late_field,
         paste::paste,
         std::fmt,
         thunderdome::Index,

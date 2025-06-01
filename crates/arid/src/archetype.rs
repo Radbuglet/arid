@@ -8,11 +8,11 @@ use std::{
 
 use hashbrown::hash_map::RawEntryMut;
 use index_vec::{IndexVec, define_index_type};
+use late_struct::LateInstanceDyn;
 use thunderdome::Index;
 
 use crate::{
     entity::{Component, Entity, Handle},
-    late_struct::LateInstanceDyn,
     utils::{FxBuildHasher, FxHashMap, FxHashSet, IterHashExt, MergeIter, RemoveIter},
     world::World,
 };

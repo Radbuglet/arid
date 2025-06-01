@@ -1,3 +1,5 @@
+#![expect(clippy::missing_safety_doc)]
+
 use std::{
     alloc::{self, Layout},
     any::{TypeId, type_name},
@@ -242,53 +244,49 @@ pub mod late_macro_internals {
 macro_rules! late_struct {
     ($($ty:ty),*$(,)?) => {$(
         const _: () = {
-            static STATE: $crate::late_struct::late_macro_internals::LateStructState =
-                $crate::late_struct::late_macro_internals::LateStructState::new();
+            static STATE: $crate::late_macro_internals::LateStructState =
+                $crate::late_macro_internals::LateStructState::new();
 
-            #[$crate::late_struct::late_macro_internals::linkme::distributed_slice(
-                $crate::late_struct::late_macro_internals::LATE_STRUCTS
+            #[$crate::late_macro_internals::linkme::distributed_slice(
+                $crate::late_macro_internals::LATE_STRUCTS
             )]
-            #[linkme(crate = $crate::late_struct::late_macro_internals::linkme)]
-            static ENTRY: fn() -> $crate::late_struct::late_macro_internals::LateStructEntry =
-                $crate::late_struct::late_macro_internals::LateStructEntry::of::<$ty>;
+            #[linkme(crate = $crate::late_macro_internals::linkme)]
+            static ENTRY: fn() -> $crate::late_macro_internals::LateStructEntry =
+                $crate::late_macro_internals::LateStructEntry::of::<$ty>;
 
-            unsafe impl $crate::late_struct::late_macro_internals::LateStruct for $ty {
-                fn state() -> &'static $crate::late_struct::late_macro_internals::LateStructState {
+            unsafe impl $crate::late_macro_internals::LateStruct for $ty {
+                fn state() -> &'static $crate::late_macro_internals::LateStructState {
                     &STATE
                 }
             }
         };
     )*};
 }
-
-pub use late_struct;
 
 #[macro_export]
 macro_rules! late_field {
     ($($ty:ty [$ns:ty] => $val:ty),*$(,)?) => {$(
         const _: () = {
-            static STATE: $crate::late_struct::late_macro_internals::LateFieldState =
-                $crate::late_struct::late_macro_internals::LateFieldState::new::<$val>();
+            static STATE: $crate::late_macro_internals::LateFieldState =
+                $crate::late_macro_internals::LateFieldState::new::<$val>();
 
-            #[$crate::late_struct::late_macro_internals::linkme::distributed_slice(
-                $crate::late_struct::late_macro_internals::LATE_FIELDS
+            #[$crate::late_macro_internals::linkme::distributed_slice(
+                $crate::late_macro_internals::LATE_FIELDS
             )]
-            #[linkme(crate = $crate::late_struct::late_macro_internals::linkme)]
-            static ENTRY: fn() -> $crate::late_struct::late_macro_internals::LateFieldEntry =
-                $crate::late_struct::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
+            #[linkme(crate = $crate::late_macro_internals::linkme)]
+            static ENTRY: fn() -> $crate::late_macro_internals::LateFieldEntry =
+                $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
 
-            unsafe impl $crate::late_struct::late_macro_internals::LateField<$ns> for $ty {
+            unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
                 type Value = $val;
 
-                fn state() -> &'static $crate::late_struct::late_macro_internals::LateFieldState {
+                fn state() -> &'static $crate::late_macro_internals::LateFieldState {
                     &STATE
                 }
             }
         };
     )*};
 }
-
-pub use late_field;
 
 // === Instances === //
 

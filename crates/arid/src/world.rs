@@ -4,10 +4,9 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::{
-    entity::guard_entity_reentrancy_checks,
-    late_struct::{LateField, LateInstance, late_struct},
-};
+use late_struct::{LateField, LateInstance, late_struct};
+
+use crate::entity::guard_entity_reentrancy_checks;
 
 pub type W<'a> = &'a mut World;
 pub type Wr<'a> = &'a World;
