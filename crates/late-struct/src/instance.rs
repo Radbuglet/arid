@@ -220,10 +220,10 @@ impl<S: LateStruct> LateInstanceDyn<S> {
         self.inner.get_mut::<F>()
     }
 
-    pub fn try_borrow_erased(
-        &self,
+    pub fn try_borrow_erased<'a>(
+        &'a self,
         field: &LateFieldDescriptor<S>,
-    ) -> Result<Ref<'_, S::EraseTo>, cell::BorrowError> {
+    ) -> Result<Ref<'a, S::EraseTo>, cell::BorrowError> {
         self.inner.cells[field.index(self.inner.init_token)]
             .try_borrow()
             .map(|field_guard| {
@@ -233,10 +233,10 @@ impl<S: LateStruct> LateInstanceDyn<S> {
             })
     }
 
-    pub fn try_borrow_erased_mut(
-        &self,
+    pub fn try_borrow_erased_mut<'a>(
+        &'a self,
         field: &LateFieldDescriptor<S>,
-    ) -> Result<RefMut<'_, S::EraseTo>, cell::BorrowMutError> {
+    ) -> Result<RefMut<'a, S::EraseTo>, cell::BorrowMutError> {
         self.inner.cells[field.index(self.inner.init_token)]
             .try_borrow_mut()
             .map(|field_guard| {
@@ -246,14 +246,17 @@ impl<S: LateStruct> LateInstanceDyn<S> {
             })
     }
 
-    pub fn borrow_erased(&self, field: &LateFieldDescriptor<S>) -> Ref<'_, S::EraseTo> {
+    pub fn borrow_erased<'a>(&'a self, field: &LateFieldDescriptor<S>) -> Ref<'a, S::EraseTo> {
         Ref::map(
             self.inner.cells[field.index(self.inner.init_token)].borrow(),
             |()| unsafe { self.get_erased_ptr(field).as_ref() },
         )
     }
 
-    pub fn borrow_erased_mut(&self, field: &LateFieldDescriptor<S>) -> RefMut<'_, S::EraseTo> {
+    pub fn borrow_erased_mut<'a>(
+        &'a self,
+        field: &LateFieldDescriptor<S>,
+    ) -> RefMut<'a, S::EraseTo> {
         RefMut::map(
             self.inner.cells[field.index(self.inner.init_token)].borrow_mut(),
             |()| unsafe { self.get_erased_ptr(field).as_mut() },
