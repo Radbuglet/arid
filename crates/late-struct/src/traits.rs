@@ -127,7 +127,7 @@ macro_rules! late_field {
     (@single $ty:ty [$ns:ty] => $val:ty) => {
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateFieldDescriptor =
-                $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $val>();
+                $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $ty>();
 
             #[$crate::late_macro_internals::linkme::distributed_slice(
                 $crate::late_macro_internals::LATE_FIELDS
