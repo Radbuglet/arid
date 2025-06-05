@@ -117,7 +117,7 @@ impl RawLateFieldDescriptor {
             },
             key_type_name: type_name::<F>,
             key_type_id: TypeId::of::<F>,
-            parent_struct: S::descriptor,
+            parent_struct: S::raw_descriptor,
         }
     }
 
@@ -254,12 +254,40 @@ impl<S: LateStruct> LateFieldDescriptor<S> {
 
 // Forwards
 impl<S: LateStruct> LateFieldDescriptor<S> {
-    pub fn parent_struct(&self) -> &'static LateStructDescriptor<S> {
-        unsafe { self.raw.parent_struct().typed_unchecked() }
+    pub fn index(&self, token: LateLayoutInitToken) -> usize {
+        self.raw.index(token)
+    }
+
+    pub fn offset(&self, token: LateLayoutInitToken) -> usize {
+        self.raw.offset(token)
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.raw.layout()
+    }
+
+    pub unsafe fn init(&self, value: *mut u8) {
+        unsafe { self.raw.init(value) }
+    }
+
+    pub unsafe fn drop(&self, value: *mut u8) {
+        unsafe { self.raw.drop(value) }
     }
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // We don't dereference `valu`
     pub fn erase_value(&self, value: *mut u8) -> *mut S::EraseTo {
         unsafe { self.raw.erase_value::<S>(value) }
+    }
+
+    pub fn key_type_name(&self) -> &'static str {
+        self.raw.key_type_name()
+    }
+
+    pub fn key_type_id(&self) -> TypeId {
+        self.raw.key_type_id()
+    }
+
+    pub fn parent_struct(&self) -> &'static LateStructDescriptor<S> {
+        unsafe { self.raw.parent_struct().typed_unchecked() }
     }
 }

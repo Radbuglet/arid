@@ -1,17 +1,27 @@
-use crate::{RawLateFieldDescriptor, RawLateStructDescriptor};
+use crate::{
+    LateFieldDescriptor, LateStructDescriptor, RawLateFieldDescriptor, RawLateStructDescriptor,
+};
 
 // === Trait Definitions === //
 
-pub unsafe trait LateStruct: 'static {
+pub unsafe trait LateStruct: Sized + 'static {
     type EraseTo: ?Sized + 'static;
 
-    fn descriptor() -> &'static RawLateStructDescriptor;
+    fn raw_descriptor() -> &'static RawLateStructDescriptor;
+
+    fn descriptor() -> &'static LateStructDescriptor<Self> {
+        unsafe { Self::raw_descriptor().typed_unchecked() }
+    }
 }
 
-pub unsafe trait LateField<S: LateStruct>: 'static {
+pub unsafe trait LateField<S: LateStruct>: Sized + 'static {
     type Value: 'static + Default;
 
-    fn descriptor() -> &'static RawLateFieldDescriptor;
+    fn raw_descriptor() -> &'static RawLateFieldDescriptor;
+
+    fn descriptor() -> &'static LateFieldDescriptor<S> {
+        unsafe { Self::raw_descriptor().typed_unchecked() }
+    }
 
     fn coerce(value: *mut Self::Value) -> *mut S::EraseTo;
 }
@@ -42,7 +52,7 @@ pub mod late_macro_internals {
         pub fn of<S: LateStruct>() -> Self {
             Self {
                 struct_type: TypeId::of::<S>(),
-                descriptor: S::descriptor(),
+                descriptor: S::raw_descriptor(),
             }
         }
     }
@@ -57,7 +67,7 @@ pub mod late_macro_internals {
         pub fn of<S: LateStruct, F: LateField<S>>() -> Self {
             Self {
                 struct_type: TypeId::of::<S>(),
-                descriptor: F::descriptor(),
+                descriptor: F::raw_descriptor(),
             }
         }
     }
@@ -98,7 +108,7 @@ macro_rules! late_struct {
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
                 type EraseTo = $erase_to;
 
-                fn descriptor() -> &'static $crate::late_macro_internals::RawLateStructDescriptor {
+                fn raw_descriptor() -> &'static $crate::late_macro_internals::RawLateStructDescriptor {
                     &DESCRIPTOR
                 }
             }
@@ -129,7 +139,7 @@ macro_rules! late_field {
             unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
                 type Value = $val;
 
-                fn descriptor() -> &'static $crate::late_macro_internals::RawLateFieldDescriptor {
+                fn raw_descriptor() -> &'static $crate::late_macro_internals::RawLateFieldDescriptor {
                     &DESCRIPTOR
                 }
 

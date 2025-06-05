@@ -1,7 +1,7 @@
 use std::{
     alloc,
     any::TypeId,
-    cell::{Ref, RefCell, RefMut},
+    cell::{self, Ref, RefCell, RefMut},
     fmt,
     marker::PhantomData,
     ptr::NonNull,
@@ -9,7 +9,7 @@ use std::{
 
 use scopeguard::ScopeGuard;
 
-use crate::{LateField, LateLayoutInitToken, LateStruct, RawLateFieldDescriptor};
+use crate::{LateField, LateFieldDescriptor, LateLayoutInitToken, LateStruct};
 
 // === Exterior Mutability === //
 
@@ -50,9 +50,7 @@ where
         let mut f = f.debug_struct("LateInstance");
 
         for field in S::descriptor().fields(self.init_token) {
-            f.field(field.key_type_name(), &unsafe {
-                self.get_erased_ptr_unchecked(field)
-            });
+            f.field(field.key_type_name(), &self.get_erased_ptr(field));
         }
 
         f.finish()
@@ -113,22 +111,10 @@ impl<S: LateStruct> LateInstance<S> {
         self.data_base
     }
 
-    pub fn field_count(&self) -> usize {
-        S::descriptor().fields(self.init_token).len()
-    }
-
-    pub unsafe fn get_erased_ptr_unchecked(
-        &self,
-        field: &RawLateFieldDescriptor,
-    ) -> NonNull<S::EraseTo> {
-        debug_assert_eq!(
-            field.parent_struct() as *const _,
-            S::descriptor() as *const _
-        );
-
+    pub fn get_erased_ptr(&self, field: &LateFieldDescriptor<S>) -> NonNull<S::EraseTo> {
         unsafe {
             NonNull::new_unchecked(
-                field.erase_value::<S>(
+                field.erase_value(
                     self.data_base
                         .add(field.offset(self.init_token))
                         .cast()
@@ -138,16 +124,12 @@ impl<S: LateStruct> LateInstance<S> {
         }
     }
 
-    pub fn get_erased_ptr(&self, i: usize) -> NonNull<S::EraseTo> {
-        unsafe { self.get_erased_ptr_unchecked(S::descriptor().fields(self.init_token)[i]) }
+    pub fn get_erased(&self, field: &LateFieldDescriptor<S>) -> &S::EraseTo {
+        unsafe { self.get_erased_ptr(field).as_ref() }
     }
 
-    pub fn get_erased(&self, i: usize) -> &S::EraseTo {
-        unsafe { self.get_erased_ptr(i).as_ref() }
-    }
-
-    pub fn get_erased_mut(&mut self, i: usize) -> &mut S::EraseTo {
-        unsafe { self.get_erased_ptr(i).as_mut() }
+    pub fn get_erased_mut(&mut self, field: &LateFieldDescriptor<S>) -> &mut S::EraseTo {
+        unsafe { self.get_erased_ptr(field).as_mut() }
     }
 
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
@@ -209,22 +191,8 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstanceDynamic");
 
-        for (field, cell) in S::descriptor()
-            .fields(self.inner.init_token)
-            .iter()
-            .zip(&self.inner.cells)
-        {
-            let _guard = match cell.try_borrow() {
-                Ok(v) => v,
-                Err(err) => {
-                    f.field(field.key_type_name(), &err);
-                    continue;
-                }
-            };
-
-            let instance = unsafe { self.inner.get_erased_ptr_unchecked(field).as_ref() };
-
-            f.field(field.key_type_name(), &instance);
+        for field in S::descriptor().fields(self.inner.init_token) {
+            f.field(field.key_type_name(), &self.try_borrow_erased(field));
         }
 
         f.finish()
@@ -244,8 +212,66 @@ impl<S: LateStruct> LateInstanceDyn<S> {
         self.inner.get_ptr::<F>()
     }
 
+    pub fn get_erased_ptr(&self, field: &LateFieldDescriptor<S>) -> NonNull<S::EraseTo> {
+        self.inner.get_erased_ptr(field)
+    }
+
     pub fn get_mut<F: LateField<S>>(&mut self) -> &mut F::Value {
         self.inner.get_mut::<F>()
+    }
+
+    pub fn try_borrow_erased(
+        &self,
+        field: &LateFieldDescriptor<S>,
+    ) -> Result<Ref<'_, S::EraseTo>, cell::BorrowError> {
+        self.inner.cells[field.index(self.inner.init_token)]
+            .try_borrow()
+            .map(|field_guard| {
+                Ref::map(field_guard, |()| unsafe {
+                    self.get_erased_ptr(field).as_ref()
+                })
+            })
+    }
+
+    pub fn try_borrow_erased_mut(
+        &self,
+        field: &LateFieldDescriptor<S>,
+    ) -> Result<RefMut<'_, S::EraseTo>, cell::BorrowMutError> {
+        self.inner.cells[field.index(self.inner.init_token)]
+            .try_borrow_mut()
+            .map(|field_guard| {
+                RefMut::map(field_guard, |()| unsafe {
+                    self.get_erased_ptr(field).as_mut()
+                })
+            })
+    }
+
+    pub fn borrow_erased(&self, field: &LateFieldDescriptor<S>) -> Ref<'_, S::EraseTo> {
+        Ref::map(
+            self.inner.cells[field.index(self.inner.init_token)].borrow(),
+            |()| unsafe { self.get_erased_ptr(field).as_ref() },
+        )
+    }
+
+    pub fn borrow_erased_mut(&self, field: &LateFieldDescriptor<S>) -> RefMut<'_, S::EraseTo> {
+        RefMut::map(
+            self.inner.cells[field.index(self.inner.init_token)].borrow_mut(),
+            |()| unsafe { self.get_erased_ptr(field).as_mut() },
+        )
+    }
+
+    pub fn try_borrow<F: LateField<S>>(&self) -> Result<Ref<'_, F::Value>, cell::BorrowError> {
+        self.inner.cells[F::descriptor().index(self.inner.init_token)]
+            .try_borrow()
+            .map(|field| Ref::map(field, |()| unsafe { self.get_ptr::<F>().as_ref() }))
+    }
+
+    pub fn try_borrow_mut<F: LateField<S>>(
+        &self,
+    ) -> Result<RefMut<'_, F::Value>, cell::BorrowMutError> {
+        self.inner.cells[F::descriptor().index(self.inner.init_token)]
+            .try_borrow_mut()
+            .map(|field| RefMut::map(field, |()| unsafe { self.get_ptr::<F>().as_mut() }))
     }
 
     pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
