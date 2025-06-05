@@ -2,6 +2,7 @@ use std::{
     alloc,
     any::TypeId,
     cell::{self, Ref, RefCell, RefMut},
+    convert::Infallible,
     fmt,
     marker::PhantomData,
     ptr::NonNull,
@@ -64,7 +65,9 @@ impl<S: LateStruct> Default for LateInstance<S> {
 }
 
 impl<S: LateStruct> LateInstance<S> {
-    pub fn new() -> Self {
+    pub unsafe fn try_new_custom<E>(
+        mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8) -> Result<(), E>,
+    ) -> Result<Self, E> {
         let init_token = LateLayoutInitToken::new();
 
         let struct_layout = S::descriptor().layout(init_token);
@@ -87,7 +90,9 @@ impl<S: LateStruct> LateInstance<S> {
         });
 
         for &field in struct_fields {
-            unsafe { field.init(data_base.add(field.offset(init_token)).as_ptr()) };
+            init(&field, unsafe {
+                data_base.add(field.offset(init_token)).as_ptr()
+            })?;
             *drop_guard += 1;
         }
 
@@ -95,11 +100,31 @@ impl<S: LateStruct> LateInstance<S> {
         ScopeGuard::into_inner(dealloc_guard);
         ScopeGuard::into_inner(drop_guard);
 
-        Self {
+        Ok(Self {
             _ty: PhantomData,
             init_token,
             data_base,
             cells: Box::from_iter((0..struct_fields.len()).map(|_| RefCell::new(()))),
+        })
+    }
+
+    pub unsafe fn new_custom(
+        mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8),
+    ) -> Self {
+        let Ok(res) = unsafe {
+            Self::try_new_custom(|field, ptr| {
+                init(field, ptr);
+                Result::<(), Infallible>::Ok(())
+            })
+        };
+        res
+    }
+
+    pub fn new() -> Self {
+        unsafe {
+            Self::new_custom(|field, ptr| {
+                field.init(ptr);
+            })
         }
     }
 

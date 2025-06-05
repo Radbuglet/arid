@@ -152,18 +152,16 @@
 //! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
 //! ```
 //!
+//! TODO: Document `DynEq` and `DynClone`.
+//!
 //! Finally, we should note that field values can take on a different type than their "key" type.
 //!
 //! TODO
 //!
-//! ## Performance
+//! ## Internals and Performance
 //!
 //! Conceptually, a `LateInstance` could be thought of as a `HashMap<TypeId, Box<dyn Any>>`. In
 //! practice, however, TODO
-//!
-//! ## Limitations
-//!
-//! TODO
 //!
 
 mod descriptor;
@@ -174,6 +172,9 @@ pub use self::init::*;
 
 mod instance;
 pub use self::instance::*;
+
+mod std_ops;
+pub use std_ops::*;
 
 mod traits;
 pub use self::traits::*;
