@@ -95,7 +95,71 @@
 //!
 //! ## Advanced Usage
 //!
+//! By default, all fields of a given struct are required to implement [`Debug`], [`Default`], and
+//! `'static`. These requirements, however, can be changed on a per-struct basis. For instance, we
+//! can remove the [`Debug`] requirement and instead require [`Send`], [`Sync`], and a custom trait
+//! `Reflect` with the following `late_struct` definition...
+//!
+//! ```
+//! use late_struct::late_struct;
+//!
+//! trait Reflect {
+//!     fn say_hi(&self);
+//! }
+//!
+//! struct MyStruct;
+//!
+//! late_struct!(MyStruct => dyn 'static + Reflect + Send + Sync);
+//! ```
+//!
+//! The only mandatory requirements of a field are that it have a [`Default`] initializer and live
+//! for `'static`.
+//!
+//! We can access the erased forms of these fields using the [`LateInstance::fields`],
+//! [`LateInstance::get_erased`], and [`LateInstance::get_erased_mut`] methods like so...
+//!
+//! ```
+//! # use late_struct::{late_field, late_struct, LateInstance};
+//! # use std::sync::Arc;
+//! #
+//! # trait Reflect {
+//! #     fn say_hi(&self);
+//! # }
+//! #
+//! # struct MyStruct;
+//! #
+//! # late_struct!(MyStruct => dyn 'static + Reflect + Send + Sync);
+//! #
+//! #[derive(Default)]
+//! struct MyField;
+//!
+//! impl Reflect for MyField {
+//!    fn say_hi(&self) {
+//!        println!("Hello!");
+//!    }
+//! }
+//!
+//! late_field!(MyField[MyStruct]);
+//!
+//! fn say_greetings_on_a_thread(instance: Arc<LateInstance<MyStruct>>) {
+//!     std::thread::spawn(move || {
+//!         for field in instance.fields() {
+//!              instance.get_erased(field).say_hi();
+//!         }
+//!     });
+//! }
+//! #
+//! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
+//! ```
+//!
+//! Finally, we should note that field values can take on a different type than their "key" type.
+//!
 //! TODO
+//!
+//! ## Performance
+//!
+//! Conceptually, a `LateInstance` could be thought of as a `HashMap<TypeId, Box<dyn Any>>`. In
+//! practice, however, TODO
 //!
 //! ## Limitations
 //!

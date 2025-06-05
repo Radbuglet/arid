@@ -49,7 +49,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstance");
 
-        for field in S::descriptor().fields(self.init_token) {
+        for field in self.fields() {
             f.field(field.key_type_name(), &self.get_erased_ptr(field));
         }
 
@@ -105,6 +105,10 @@ impl<S: LateStruct> LateInstance<S> {
 
     pub fn init_token(&self) -> LateLayoutInitToken {
         self.init_token
+    }
+
+    pub fn fields(&self) -> &'static [&'static LateFieldDescriptor<S>] {
+        S::descriptor().fields(self.init_token)
     }
 
     pub fn base_ptr(&self) -> NonNull<u8> {
@@ -191,7 +195,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstanceDynamic");
 
-        for field in S::descriptor().fields(self.inner.init_token) {
+        for field in self.fields() {
             f.field(field.key_type_name(), &self.try_borrow_erased(field));
         }
 
@@ -206,6 +210,10 @@ impl<S: LateStruct> LateInstanceDyn<S> {
 
     pub fn init_token(&self) -> LateLayoutInitToken {
         self.inner.init_token
+    }
+
+    pub fn fields(&self) -> &'static [&'static LateFieldDescriptor<S>] {
+        self.inner.fields()
     }
 
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
