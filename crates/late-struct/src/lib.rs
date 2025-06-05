@@ -111,6 +111,7 @@ use std::{
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::{self, NonNull},
+    slice,
     sync::{
         Once,
         atomic::{AtomicPtr, AtomicUsize, Ordering::Relaxed},
@@ -124,27 +125,27 @@ use scopeguard::ScopeGuard;
 pub unsafe trait LateStruct: 'static {
     type EraseTo: ?Sized + 'static;
 
-    fn state() -> &'static LateStructState;
+    fn descriptor() -> &'static RawLateStructDescriptor;
 }
 
 pub unsafe trait LateField<S: LateStruct>: 'static {
     type Value: 'static + Default;
 
-    fn state() -> &'static LateFieldState;
+    fn descriptor() -> &'static RawLateFieldDescriptor;
 
     fn coerce(value: *mut Self::Value) -> *mut S::EraseTo;
 }
 
 #[derive(Debug)]
-pub struct LateStructState {
+pub struct RawLateStructDescriptor {
     size: AtomicUsize,
     align: AtomicUsize,
-    fields: AtomicPtr<&'static [&'static LateFieldState]>,
+    fields: AtomicPtr<&'static [&'static RawLateFieldDescriptor]>,
     type_name: fn() -> &'static str,
     type_id: fn() -> TypeId,
 }
 
-impl LateStructState {
+impl RawLateStructDescriptor {
     pub const fn new<S: LateStruct>() -> Self {
         Self {
             size: AtomicUsize::new(0),
@@ -171,15 +172,23 @@ impl LateStructState {
         }
     }
 
-    pub fn fields(&self, token: LateLayoutInitToken) -> &'static [&'static LateFieldState] {
+    pub fn fields(&self, token: LateLayoutInitToken) -> &'static [&'static RawLateFieldDescriptor] {
         let _ = token;
 
         unsafe { &**self.fields.load(Relaxed) }
     }
+
+    pub fn typed<S: LateStruct>(&self) -> &LateStructDescriptor<S> {
+        LateStructDescriptor::wrap(self)
+    }
+
+    pub unsafe fn typed_unchecked<S: LateStruct>(&self) -> &LateStructDescriptor<S> {
+        unsafe { LateStructDescriptor::wrap_unchecked(self) }
+    }
 }
 
 #[derive(Debug)]
-pub struct LateFieldState {
+pub struct RawLateFieldDescriptor {
     /// The index of this field in the struct.
     index: AtomicUsize,
 
@@ -207,10 +216,10 @@ pub struct LateFieldState {
     key_type_id: fn() -> TypeId,
 
     /// Fetches the type ID of `Struct`.
-    parent_struct: fn() -> &'static LateStructState,
+    parent_struct: fn() -> &'static RawLateStructDescriptor,
 }
 
-impl LateFieldState {
+impl RawLateFieldDescriptor {
     pub const fn new<S, F>() -> Self
     where
         S: LateStruct,
@@ -229,7 +238,7 @@ impl LateFieldState {
             },
             key_type_name: type_name::<F>,
             key_type_id: TypeId::of::<F>,
-            parent_struct: S::state,
+            parent_struct: S::descriptor,
         }
     }
 
@@ -257,7 +266,7 @@ impl LateFieldState {
         unsafe { (self.drop)(value) }
     }
 
-    pub unsafe fn as_erased_unchecked<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
+    pub unsafe fn erase_value<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
         debug_assert_eq!(TypeId::of::<S>(), self.parent_struct().type_id());
 
         let mut out = MaybeUninit::<*mut S::EraseTo>::uninit();
@@ -268,13 +277,6 @@ impl LateFieldState {
         }
     }
 
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // We don't actually deref `value`.
-    pub fn as_erased<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
-        assert_eq!(TypeId::of::<S>(), self.parent_struct().type_id());
-
-        unsafe { self.as_erased_unchecked::<S>(value) }
-    }
-
     pub fn key_type_name(&self) -> &'static str {
         (self.key_type_name)()
     }
@@ -283,8 +285,103 @@ impl LateFieldState {
         (self.key_type_id)()
     }
 
-    pub fn parent_struct(&self) -> &'static LateStructState {
+    pub fn parent_struct(&self) -> &'static RawLateStructDescriptor {
         (self.parent_struct)()
+    }
+
+    pub fn typed<S: LateStruct>(&self) -> &LateFieldDescriptor<S> {
+        LateFieldDescriptor::wrap(self)
+    }
+
+    pub unsafe fn typed_unchecked<S: LateStruct>(&self) -> &LateFieldDescriptor<S> {
+        unsafe { LateFieldDescriptor::wrap_unchecked(self) }
+    }
+}
+
+// === Descriptor New-types === //
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct LateStructDescriptor<S: LateStruct> {
+    _ty: PhantomData<fn(S) -> S>,
+    raw: RawLateStructDescriptor,
+}
+
+// Conversions
+impl<S: LateStruct> LateStructDescriptor<S> {
+    pub fn wrap(raw: &RawLateStructDescriptor) -> &LateStructDescriptor<S> {
+        assert_eq!(raw.type_id(), TypeId::of::<S>());
+
+        unsafe { Self::wrap_unchecked(raw) }
+    }
+
+    pub const unsafe fn wrap_unchecked(raw: &RawLateStructDescriptor) -> &LateStructDescriptor<S> {
+        unsafe { &*(raw as *const RawLateStructDescriptor as *const LateStructDescriptor<S>) }
+    }
+
+    pub const fn raw(&self) -> &RawLateStructDescriptor {
+        &self.raw
+    }
+}
+
+// Forwards
+impl<S: LateStruct> LateStructDescriptor<S> {
+    pub fn layout(&self, token: LateLayoutInitToken) -> Layout {
+        self.raw.layout(token)
+    }
+
+    pub fn fields(&self, token: LateLayoutInitToken) -> &'static [&'static LateFieldDescriptor<S>] {
+        unsafe { LateFieldDescriptor::wrap_slice_unchecked(self.raw.fields(token)) }
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct LateFieldDescriptor<S: LateStruct> {
+    _ty: PhantomData<fn(S) -> S>,
+    raw: RawLateFieldDescriptor,
+}
+
+// Conversions
+impl<S: LateStruct> LateFieldDescriptor<S> {
+    pub fn wrap(raw: &RawLateFieldDescriptor) -> &LateFieldDescriptor<S> {
+        assert_eq!(raw.parent_struct().type_id(), TypeId::of::<S>());
+
+        unsafe { Self::wrap_unchecked(raw) }
+    }
+
+    pub const unsafe fn wrap_unchecked(raw: &RawLateFieldDescriptor) -> &LateFieldDescriptor<S> {
+        unsafe { &*(raw as *const RawLateFieldDescriptor as *const LateFieldDescriptor<S>) }
+    }
+
+    pub const unsafe fn wrap_slice_unchecked<'a, 'b>(
+        raw: &'a [&'b RawLateFieldDescriptor],
+    ) -> &'a [&'b LateFieldDescriptor<S>] {
+        unsafe {
+            slice::from_raw_parts(raw.as_ptr().cast::<&'b LateFieldDescriptor<S>>(), raw.len())
+        }
+    }
+
+    pub const fn raw(&self) -> &RawLateFieldDescriptor {
+        &self.raw
+    }
+
+    pub fn slice_as_raw<'a, 'b>(
+        me: &'a [&'b LateFieldDescriptor<S>],
+    ) -> &'a [&'b RawLateFieldDescriptor] {
+        unsafe { slice::from_raw_parts(me.as_ptr().cast::<&'b RawLateFieldDescriptor>(), me.len()) }
+    }
+}
+
+// Forwards
+impl<S: LateStruct> LateFieldDescriptor<S> {
+    pub fn parent_struct(&self) -> &'static LateStructDescriptor<S> {
+        unsafe { self.raw.parent_struct().typed_unchecked() }
+    }
+
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // We don't dereference `valu`
+    pub fn erase_value(&self, value: *mut u8) -> *mut S::EraseTo {
+        unsafe { self.raw.erase_value::<S>(value) }
     }
 }
 
@@ -311,13 +408,18 @@ impl LateLayoutInitToken {
         ONCE.call_once(|| {
             use self::late_macro_internals::{LATE_FIELDS, LATE_STRUCTS};
 
-            let mut structs =
-                HashMap::<TypeId, (&'static LateStructState, Vec<&'static LateFieldState>)>::new();
+            let mut structs = HashMap::<
+                TypeId,
+                (
+                    &'static RawLateStructDescriptor,
+                    Vec<&'static RawLateFieldDescriptor>,
+                ),
+            >::new();
 
             for entry in LATE_STRUCTS {
                 let entry = entry();
 
-                structs.insert(entry.struct_type, (entry.state, Vec::new()));
+                structs.insert(entry.struct_type, (entry.descriptor, Vec::new()));
             }
 
             for entry in LATE_FIELDS {
@@ -327,10 +429,10 @@ impl LateLayoutInitToken {
                     .get_mut(&entry.struct_type)
                     .unwrap()
                     .1
-                    .push(entry.state);
+                    .push(entry.descriptor);
             }
 
-            for (struct_state, struct_fields) in structs.into_values() {
+            for (struct_desc, struct_fields) in structs.into_values() {
                 let struct_fields: &[_] = &*Box::leak(Box::from_iter(struct_fields));
                 let struct_fields_p = Box::leak(Box::new(struct_fields));
 
@@ -343,9 +445,9 @@ impl LateLayoutInitToken {
                     overall_layout = new_layout;
                 }
 
-                struct_state.size.store(overall_layout.size(), Relaxed);
-                struct_state.align.store(overall_layout.align(), Relaxed);
-                struct_state.fields.store(struct_fields_p, Relaxed);
+                struct_desc.size.store(overall_layout.size(), Relaxed);
+                struct_desc.align.store(overall_layout.align(), Relaxed);
+                struct_desc.fields.store(struct_fields_p, Relaxed);
             }
         });
 
@@ -360,7 +462,10 @@ pub mod late_macro_internals {
     use std::{any::TypeId, fmt};
 
     pub use {
-        super::{LateField, LateFieldState, LateStruct, LateStructState, late_field, late_struct},
+        super::{
+            LateField, LateStruct, RawLateFieldDescriptor, RawLateStructDescriptor, late_field,
+            late_struct,
+        },
         linkme,
     };
 
@@ -369,14 +474,14 @@ pub mod late_macro_internals {
     #[derive(Debug, Copy, Clone)]
     pub struct LateStructEntry {
         pub struct_type: TypeId,
-        pub state: &'static LateStructState,
+        pub descriptor: &'static RawLateStructDescriptor,
     }
 
     impl LateStructEntry {
         pub fn of<S: LateStruct>() -> Self {
             Self {
                 struct_type: TypeId::of::<S>(),
-                state: S::state(),
+                descriptor: S::descriptor(),
             }
         }
     }
@@ -384,14 +489,14 @@ pub mod late_macro_internals {
     #[derive(Debug, Copy, Clone)]
     pub struct LateFieldEntry {
         pub struct_type: TypeId,
-        pub state: &'static LateFieldState,
+        pub descriptor: &'static RawLateFieldDescriptor,
     }
 
     impl LateFieldEntry {
         pub fn of<S: LateStruct, F: LateField<S>>() -> Self {
             Self {
                 struct_type: TypeId::of::<S>(),
-                state: F::state(),
+                descriptor: F::descriptor(),
             }
         }
     }
@@ -419,8 +524,8 @@ macro_rules! late_struct {
     };
     (@single $ty:ty => $erase_to:ty) => {
         const _: () = {
-            static STATE: $crate::late_macro_internals::LateStructState =
-                $crate::late_macro_internals::LateStructState::new::<$ty>();
+            static DESCRIPTOR: $crate::late_macro_internals::RawLateStructDescriptor =
+                $crate::late_macro_internals::RawLateStructDescriptor::new::<$ty>();
 
             #[$crate::late_macro_internals::linkme::distributed_slice(
                 $crate::late_macro_internals::LATE_STRUCTS
@@ -432,8 +537,8 @@ macro_rules! late_struct {
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
                 type EraseTo = $erase_to;
 
-                fn state() -> &'static $crate::late_macro_internals::LateStructState {
-                    &STATE
+                fn descriptor() -> &'static $crate::late_macro_internals::RawLateStructDescriptor {
+                    &DESCRIPTOR
                 }
             }
         };
@@ -450,8 +555,8 @@ macro_rules! late_field {
     };
     (@single $ty:ty [$ns:ty] => $val:ty) => {
         const _: () = {
-            static STATE: $crate::late_macro_internals::LateFieldState =
-                $crate::late_macro_internals::LateFieldState::new::<$ns, $val>();
+            static DESCRIPTOR: $crate::late_macro_internals::RawLateFieldDescriptor =
+                $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $val>();
 
             #[$crate::late_macro_internals::linkme::distributed_slice(
                 $crate::late_macro_internals::LATE_FIELDS
@@ -463,8 +568,8 @@ macro_rules! late_field {
             unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
                 type Value = $val;
 
-                fn state() -> &'static $crate::late_macro_internals::LateFieldState {
-                    &STATE
+                fn descriptor() -> &'static $crate::late_macro_internals::RawLateFieldDescriptor {
+                    &DESCRIPTOR
                 }
 
                 fn coerce(value: *mut Self::Value) -> *mut <$ns as $crate::late_macro_internals::LateStruct>::EraseTo {
@@ -513,7 +618,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstance");
 
-        for field in S::state().fields(self.init_token) {
+        for field in S::descriptor().fields(self.init_token) {
             f.field(field.key_type_name(), &unsafe {
                 self.get_erased_ptr_unchecked(field)
             });
@@ -533,8 +638,8 @@ impl<S: LateStruct> LateInstance<S> {
     pub fn new() -> Self {
         let init_token = LateLayoutInitToken::new();
 
-        let struct_layout = S::state().layout(init_token);
-        let struct_fields = S::state().fields(init_token);
+        let struct_layout = S::descriptor().layout(init_token);
+        let struct_fields = S::descriptor().fields(init_token);
 
         // Allocate space for the instance
         let Some(data_base) = NonNull::new(unsafe { alloc::alloc(struct_layout) }) else {
@@ -578,15 +683,21 @@ impl<S: LateStruct> LateInstance<S> {
     }
 
     pub fn field_count(&self) -> usize {
-        S::state().fields(self.init_token).len()
+        S::descriptor().fields(self.init_token).len()
     }
 
-    pub unsafe fn get_erased_ptr_unchecked(&self, field: &LateFieldState) -> NonNull<S::EraseTo> {
-        debug_assert_eq!(field.parent_struct() as *const _, S::state() as *const _);
+    pub unsafe fn get_erased_ptr_unchecked(
+        &self,
+        field: &RawLateFieldDescriptor,
+    ) -> NonNull<S::EraseTo> {
+        debug_assert_eq!(
+            field.parent_struct() as *const _,
+            S::descriptor() as *const _
+        );
 
         unsafe {
             NonNull::new_unchecked(
-                field.as_erased_unchecked::<S>(
+                field.erase_value::<S>(
                     self.data_base
                         .add(field.offset(self.init_token))
                         .cast()
@@ -597,7 +708,7 @@ impl<S: LateStruct> LateInstance<S> {
     }
 
     pub fn get_erased_ptr(&self, i: usize) -> NonNull<S::EraseTo> {
-        unsafe { self.get_erased_ptr_unchecked(S::state().fields(self.init_token)[i]) }
+        unsafe { self.get_erased_ptr_unchecked(S::descriptor().fields(self.init_token)[i]) }
     }
 
     pub fn get_erased(&self, i: usize) -> &S::EraseTo {
@@ -611,7 +722,7 @@ impl<S: LateStruct> LateInstance<S> {
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
         unsafe {
             self.data_base
-                .add(F::state().offset(self.init_token))
+                .add(F::descriptor().offset(self.init_token))
                 .cast()
         }
     }
@@ -641,8 +752,8 @@ impl<S: LateStruct> LateInstance<S> {
 
 impl<S: LateStruct> Drop for LateInstance<S> {
     fn drop(&mut self) {
-        let struct_layout = S::state().layout(self.init_token);
-        let struct_fields = S::state().fields(self.init_token);
+        let struct_layout = S::descriptor().layout(self.init_token);
+        let struct_fields = S::descriptor().fields(self.init_token);
 
         for field in struct_fields {
             unsafe { field.drop(self.data_base.add(field.offset(self.init_token)).as_ptr()) }
@@ -665,7 +776,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstanceDynamic");
 
-        for (field, cell) in S::state()
+        for (field, cell) in S::descriptor()
             .fields(self.inner.init_token)
             .iter()
             .zip(&self.inner.cells)
@@ -706,14 +817,14 @@ impl<S: LateStruct> LateInstanceDyn<S> {
 
     pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
         Ref::map(
-            self.inner.cells[F::state().index(self.inner.init_token)].borrow(),
+            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow(),
             |()| unsafe { self.get_ptr::<F>().as_ref() },
         )
     }
 
     pub fn borrow_mut<F: LateField<S>>(&self) -> RefMut<'_, F::Value> {
         RefMut::map(
-            self.inner.cells[F::state().index(self.inner.init_token)].borrow_mut(),
+            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow_mut(),
             |()| unsafe { self.get_ptr::<F>().as_mut() },
         )
     }
