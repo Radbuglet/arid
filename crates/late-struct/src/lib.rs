@@ -93,7 +93,9 @@
 //!
 //! See the documentation of [`LateInstance`] for more ways to access the instance.
 //!
-//! TODO: Document `late_struct` and `late_field`.
+//! ## Advanced Usage
+//!
+//! TODO
 //!
 //! ## Limitations
 //!
@@ -138,21 +140,27 @@ pub struct LateStructState {
     size: AtomicUsize,
     align: AtomicUsize,
     fields: AtomicPtr<&'static [&'static LateFieldState]>,
-}
-
-impl Default for LateStructState {
-    fn default() -> Self {
-        Self::new()
-    }
+    type_name: fn() -> &'static str,
+    type_id: fn() -> TypeId,
 }
 
 impl LateStructState {
-    pub const fn new() -> Self {
+    pub const fn new<S: LateStruct>() -> Self {
         Self {
             size: AtomicUsize::new(0),
             align: AtomicUsize::new(0),
             fields: AtomicPtr::new(ptr::null_mut()),
+            type_name: type_name::<S>,
+            type_id: TypeId::of::<S>,
         }
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        (self.type_name)()
+    }
+
+    pub fn type_id(&self) -> TypeId {
+        (self.type_id)()
     }
 
     pub fn layout(&self, token: LateLayoutInitToken) -> Layout {
@@ -199,37 +207,41 @@ pub struct LateFieldState {
     key_type_id: fn() -> TypeId,
 
     /// Fetches the type ID of `Struct`.
-    struct_type_id: fn() -> TypeId,
+    parent_struct: fn() -> &'static LateStructState,
 }
 
 impl LateFieldState {
-    pub const fn new<S, K>() -> Self
+    pub const fn new<S, F>() -> Self
     where
         S: LateStruct,
-        K: LateField<S>,
+        F: LateField<S>,
     {
         Self {
             index: AtomicUsize::new(usize::MAX),
             offset: AtomicUsize::new(usize::MAX),
-            layout: Layout::new::<K::Value>(),
-            init: |ptr| unsafe { ptr.cast::<K::Value>().write(<K::Value>::default()) },
-            drop: |ptr| unsafe { ptr.cast::<K::Value>().drop_in_place() },
+            layout: Layout::new::<F::Value>(),
+            init: |ptr| unsafe { ptr.cast::<F::Value>().write(<F::Value>::default()) },
+            drop: |ptr| unsafe { ptr.cast::<F::Value>().drop_in_place() },
             as_erased: |ptr, write_out| unsafe {
                 write_out
                     .cast::<*mut S::EraseTo>()
-                    .write(K::coerce(ptr.cast::<K::Value>()));
+                    .write(F::coerce(ptr.cast::<F::Value>()));
             },
-            key_type_name: type_name::<K>,
-            key_type_id: TypeId::of::<K>,
-            struct_type_id: TypeId::of::<S>,
+            key_type_name: type_name::<F>,
+            key_type_id: TypeId::of::<F>,
+            parent_struct: S::state,
         }
     }
 
-    pub fn index(&self) -> usize {
+    pub fn index(&self, token: LateLayoutInitToken) -> usize {
+        let _ = token;
+
         self.index.load(Relaxed)
     }
 
-    pub fn offset(&self) -> usize {
+    pub fn offset(&self, token: LateLayoutInitToken) -> usize {
+        let _ = token;
+
         self.offset.load(Relaxed)
     }
 
@@ -246,7 +258,7 @@ impl LateFieldState {
     }
 
     pub unsafe fn as_erased_unchecked<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
-        debug_assert_eq!(TypeId::of::<S>(), self.struct_type_id());
+        debug_assert_eq!(TypeId::of::<S>(), self.parent_struct().type_id());
 
         let mut out = MaybeUninit::<*mut S::EraseTo>::uninit();
 
@@ -258,7 +270,7 @@ impl LateFieldState {
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // We don't actually deref `value`.
     pub fn as_erased<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
-        assert_eq!(TypeId::of::<S>(), self.struct_type_id());
+        assert_eq!(TypeId::of::<S>(), self.parent_struct().type_id());
 
         unsafe { self.as_erased_unchecked::<S>(value) }
     }
@@ -271,8 +283,8 @@ impl LateFieldState {
         (self.key_type_id)()
     }
 
-    pub fn struct_type_id(&self) -> TypeId {
-        (self.struct_type_id)()
+    pub fn parent_struct(&self) -> &'static LateStructState {
+        (self.parent_struct)()
     }
 }
 
@@ -408,7 +420,7 @@ macro_rules! late_struct {
     (@single $ty:ty => $erase_to:ty) => {
         const _: () = {
             static STATE: $crate::late_macro_internals::LateStructState =
-                $crate::late_macro_internals::LateStructState::new();
+                $crate::late_macro_internals::LateStructState::new::<$ty>();
 
             #[$crate::late_macro_internals::linkme::distributed_slice(
                 $crate::late_macro_internals::LATE_STRUCTS
@@ -502,11 +514,9 @@ where
         let mut f = f.debug_struct("LateInstance");
 
         for field in S::state().fields(self.init_token) {
-            let instance = unsafe {
-                &*field.as_erased_unchecked::<S>(self.data_base.add(field.offset()).as_ptr())
-            };
-
-            f.field(field.key_type_name(), &instance);
+            f.field(field.key_type_name(), &unsafe {
+                self.get_erased_ptr_unchecked(field)
+            });
         }
 
         f.finish()
@@ -538,12 +548,12 @@ impl<S: LateStruct> LateInstance<S> {
         // Initialize its fields
         let mut drop_guard = scopeguard::guard(0usize, |cnt| {
             for &field in &struct_fields[0..cnt] {
-                unsafe { field.drop(data_base.add(field.offset()).as_ptr()) };
+                unsafe { field.drop(data_base.add(field.offset(init_token)).as_ptr()) };
             }
         });
 
         for &field in struct_fields {
-            unsafe { field.init(data_base.add(field.offset()).as_ptr()) };
+            unsafe { field.init(data_base.add(field.offset(init_token)).as_ptr()) };
             *drop_guard += 1;
         }
 
@@ -559,12 +569,51 @@ impl<S: LateStruct> LateInstance<S> {
         }
     }
 
+    pub fn init_token(&self) -> LateLayoutInitToken {
+        self.init_token
+    }
+
     pub fn base_ptr(&self) -> NonNull<u8> {
         self.data_base
     }
 
+    pub fn field_count(&self) -> usize {
+        S::state().fields(self.init_token).len()
+    }
+
+    pub unsafe fn get_erased_ptr_unchecked(&self, field: &LateFieldState) -> NonNull<S::EraseTo> {
+        debug_assert_eq!(field.parent_struct() as *const _, S::state() as *const _);
+
+        unsafe {
+            NonNull::new_unchecked(
+                field.as_erased_unchecked::<S>(
+                    self.data_base
+                        .add(field.offset(self.init_token))
+                        .cast()
+                        .as_ptr(),
+                ),
+            )
+        }
+    }
+
+    pub fn get_erased_ptr(&self, i: usize) -> NonNull<S::EraseTo> {
+        unsafe { self.get_erased_ptr_unchecked(S::state().fields(self.init_token)[i]) }
+    }
+
+    pub fn get_erased(&self, i: usize) -> &S::EraseTo {
+        unsafe { self.get_erased_ptr(i).as_ref() }
+    }
+
+    pub fn get_erased_mut(&mut self, i: usize) -> &mut S::EraseTo {
+        unsafe { self.get_erased_ptr(i).as_mut() }
+    }
+
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
-        unsafe { self.data_base.add(F::state().offset()).cast() }
+        unsafe {
+            self.data_base
+                .add(F::state().offset(self.init_token))
+                .cast()
+        }
     }
 
     pub fn get_two<F, G>(&mut self) -> (&mut F::Value, &mut G::Value)
@@ -596,7 +645,7 @@ impl<S: LateStruct> Drop for LateInstance<S> {
         let struct_fields = S::state().fields(self.init_token);
 
         for field in struct_fields {
-            unsafe { field.drop(self.data_base.add(field.offset()).as_ptr()) }
+            unsafe { field.drop(self.data_base.add(field.offset(self.init_token)).as_ptr()) }
         }
 
         unsafe { alloc::dealloc(self.data_base.as_ptr(), struct_layout) };
@@ -629,9 +678,7 @@ where
                 }
             };
 
-            let instance = unsafe {
-                &*field.as_erased_unchecked::<S>(self.inner.data_base.add(field.offset()).as_ptr())
-            };
+            let instance = unsafe { self.inner.get_erased_ptr_unchecked(field).as_ref() };
 
             f.field(field.key_type_name(), &instance);
         }
@@ -645,6 +692,10 @@ impl<S: LateStruct> LateInstanceDyn<S> {
         &mut self.inner
     }
 
+    pub fn init_token(&self) -> LateLayoutInitToken {
+        self.inner.init_token
+    }
+
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
         self.inner.get_ptr::<F>()
     }
@@ -654,14 +705,15 @@ impl<S: LateStruct> LateInstanceDyn<S> {
     }
 
     pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
-        Ref::map(self.inner.cells[F::state().index()].borrow(), |()| unsafe {
-            self.get_ptr::<F>().as_ref()
-        })
+        Ref::map(
+            self.inner.cells[F::state().index(self.inner.init_token)].borrow(),
+            |()| unsafe { self.get_ptr::<F>().as_ref() },
+        )
     }
 
     pub fn borrow_mut<F: LateField<S>>(&self) -> RefMut<'_, F::Value> {
         RefMut::map(
-            self.inner.cells[F::state().index()].borrow_mut(),
+            self.inner.cells[F::state().index(self.inner.init_token)].borrow_mut(),
             |()| unsafe { self.get_ptr::<F>().as_mut() },
         )
     }
