@@ -146,7 +146,9 @@
 //!         for field in instance.fields() {
 //!              instance.get_erased(field).say_hi();
 //!         }
-//!     });
+//!     })
+//!     .join()
+//!     .unwrap()
 //! }
 //! #
 //! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
