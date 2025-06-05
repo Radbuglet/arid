@@ -107,6 +107,7 @@ use std::{
     collections::HashMap,
     fmt,
     marker::PhantomData,
+    mem::MaybeUninit,
     ptr::{self, NonNull},
     sync::{
         Once,
@@ -119,13 +120,17 @@ use scopeguard::ScopeGuard;
 // === Definitions === //
 
 pub unsafe trait LateStruct: 'static {
+    type EraseTo: ?Sized + 'static;
+
     fn state() -> &'static LateStructState;
 }
 
 pub unsafe trait LateField<S: LateStruct>: 'static {
-    type Value: 'static + Default + fmt::Debug;
+    type Value: 'static + Default;
 
     fn state() -> &'static LateFieldState;
+
+    fn coerce(value: *mut Self::Value) -> *mut S::EraseTo;
 }
 
 #[derive(Debug)]
@@ -167,30 +172,56 @@ impl LateStructState {
 
 #[derive(Debug)]
 pub struct LateFieldState {
+    /// The index of this field in the struct.
     index: AtomicUsize,
+
+    /// The byte offset of this field in the struct.
     offset: AtomicUsize,
+
+    /// The layout of this field's type.
     layout: Layout,
+
+    /// Initializes the supplied `*mut MaybeUninit<Key::Value>`.
     init: unsafe fn(*mut u8),
+
+    /// Drops the supplied `*mut Key::Value` in place.
     drop: unsafe fn(*mut u8),
-    as_debug: fn(*const u8) -> *const dyn fmt::Debug,
-    type_name: fn() -> &'static str,
-    type_id: fn() -> TypeId,
+
+    /// Transforms the supplied `*mut Key::Value` in the first parameter into a
+    /// `*mut Struct::EraseTo` and writes it out into the `*mut *mut Struct::EraseTo` pointee in the
+    /// second parameter.
+    as_erased: fn(*mut u8, *mut ()),
+
+    /// Fetches the type name of `Key`.
+    key_type_name: fn() -> &'static str,
+
+    /// Fetches the type ID of `Key`.
+    key_type_id: fn() -> TypeId,
+
+    /// Fetches the type ID of `Struct`.
+    struct_type_id: fn() -> TypeId,
 }
 
 impl LateFieldState {
-    pub const fn new<V>() -> Self
+    pub const fn new<S, K>() -> Self
     where
-        V: 'static + fmt::Debug + Default,
+        S: LateStruct,
+        K: LateField<S>,
     {
         Self {
             index: AtomicUsize::new(usize::MAX),
             offset: AtomicUsize::new(usize::MAX),
-            layout: Layout::new::<V>(),
-            init: |ptr| unsafe { ptr.cast::<V>().write(V::default()) },
-            drop: |ptr| unsafe { ptr.cast::<V>().drop_in_place() },
-            as_debug: |ptr| ptr.cast::<V>(),
-            type_name: type_name::<V>,
-            type_id: TypeId::of::<V>,
+            layout: Layout::new::<K::Value>(),
+            init: |ptr| unsafe { ptr.cast::<K::Value>().write(<K::Value>::default()) },
+            drop: |ptr| unsafe { ptr.cast::<K::Value>().drop_in_place() },
+            as_erased: |ptr, write_out| unsafe {
+                write_out
+                    .cast::<*mut S::EraseTo>()
+                    .write(K::coerce(ptr.cast::<K::Value>()));
+            },
+            key_type_name: type_name::<K>,
+            key_type_id: TypeId::of::<K>,
+            struct_type_id: TypeId::of::<S>,
         }
     }
 
@@ -206,24 +237,42 @@ impl LateFieldState {
         self.layout
     }
 
-    pub fn init(&self) -> unsafe fn(*mut u8) {
-        self.init
+    pub unsafe fn init(&self, value: *mut u8) {
+        unsafe { (self.init)(value) }
     }
 
-    pub fn drop(&self) -> unsafe fn(*mut u8) {
-        self.drop
+    pub unsafe fn drop(&self, value: *mut u8) {
+        unsafe { (self.drop)(value) }
     }
 
-    pub fn as_debug(&self) -> fn(*const u8) -> *const dyn fmt::Debug {
-        self.as_debug
+    pub unsafe fn as_erased_unchecked<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
+        debug_assert_eq!(TypeId::of::<S>(), self.struct_type_id());
+
+        let mut out = MaybeUninit::<*mut S::EraseTo>::uninit();
+
+        unsafe {
+            (self.as_erased)(value, out.as_mut_ptr().cast());
+            out.assume_init()
+        }
     }
 
-    pub fn type_name(&self) -> fn() -> &'static str {
-        self.type_name
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // We don't actually deref `value`.
+    pub fn as_erased<S: LateStruct>(&self, value: *mut u8) -> *mut S::EraseTo {
+        assert_eq!(TypeId::of::<S>(), self.struct_type_id());
+
+        unsafe { self.as_erased_unchecked::<S>(value) }
     }
 
-    pub fn type_id(&self) -> fn() -> TypeId {
-        self.type_id
+    pub fn key_type_name(&self) -> &'static str {
+        (self.key_type_name)()
+    }
+
+    pub fn key_type_id(&self) -> TypeId {
+        (self.key_type_id)()
+    }
+
+    pub fn struct_type_id(&self) -> TypeId {
+        (self.struct_type_id)()
     }
 }
 
@@ -296,12 +345,14 @@ impl LateLayoutInitToken {
 
 #[doc(hidden)]
 pub mod late_macro_internals {
-    use std::any::TypeId;
+    use std::{any::TypeId, fmt};
 
     pub use {
-        super::{LateField, LateFieldState, LateStruct, LateStructState, late_field},
+        super::{LateField, LateFieldState, LateStruct, LateStructState, late_field, late_struct},
         linkme,
     };
+
+    pub type DefaultEraseTo = dyn 'static + fmt::Debug;
 
     #[derive(Debug, Copy, Clone)]
     pub struct LateStructEntry {
@@ -342,7 +393,19 @@ pub mod late_macro_internals {
 
 #[macro_export]
 macro_rules! late_struct {
-    ($($ty:ty),*$(,)?) => {$(
+    ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {
+        $(
+            $crate::late_macro_internals::late_struct!(
+                @single $ty $(=> $erase_to)?
+            );
+        )*
+    };
+    (@single $ty:ty) => {
+        $crate::late_macro_internals::late_struct!(
+            @single $ty => $crate::late_macro_internals::DefaultEraseTo
+        );
+    };
+    (@single $ty:ty => $erase_to:ty) => {
         const _: () = {
             static STATE: $crate::late_macro_internals::LateStructState =
                 $crate::late_macro_internals::LateStructState::new();
@@ -355,12 +418,14 @@ macro_rules! late_struct {
                 $crate::late_macro_internals::LateStructEntry::of::<$ty>;
 
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
+                type EraseTo = $erase_to;
+
                 fn state() -> &'static $crate::late_macro_internals::LateStructState {
                     &STATE
                 }
             }
         };
-    )*};
+    };
 }
 
 #[macro_export]
@@ -374,7 +439,7 @@ macro_rules! late_field {
     (@single $ty:ty [$ns:ty] => $val:ty) => {
         const _: () = {
             static STATE: $crate::late_macro_internals::LateFieldState =
-                $crate::late_macro_internals::LateFieldState::new::<$val>();
+                $crate::late_macro_internals::LateFieldState::new::<$ns, $val>();
 
             #[$crate::late_macro_internals::linkme::distributed_slice(
                 $crate::late_macro_internals::LATE_FIELDS
@@ -389,6 +454,10 @@ macro_rules! late_field {
                 fn state() -> &'static $crate::late_macro_internals::LateFieldState {
                     &STATE
                 }
+
+                fn coerce(value: *mut Self::Value) -> *mut <$ns as $crate::late_macro_internals::LateStruct>::EraseTo {
+                    value
+                }
             }
         };
     };
@@ -398,20 +467,46 @@ macro_rules! late_field {
 
 pub struct LateInstance<S: LateStruct> {
     _ty: PhantomData<fn(S) -> S>,
+
+    /// The ZST proving that we have initialized the late-bound layouts of all structures present in
+    /// this application.
     init_token: LateLayoutInitToken,
+
+    /// The base pointer to the boxed structure.
     data_base: NonNull<u8>,
+
+    /// Reference cells tracking borrows of fields of this structure when accessed through
+    /// [`LateInstanceDyn`]. Since `LateInstanceDyn` can only be constructed through a mutable
+    /// reference to this structure and `LateInstanceDyn` is `!Sync`, it is safe to contain these
+    /// objects in an otherwise `Sync` structure.
     cells: Box<[RefCell<()>]>,
 }
 
-impl<S: LateStruct> fmt::Debug for LateInstance<S> {
+unsafe impl<S: LateStruct> Send for LateInstance<S> where
+    // `HashMap<TypeId, Box<S::EraseTo>>: Send` iff `S::EraseTo: Send`
+    S::EraseTo: Send
+{
+}
+
+unsafe impl<S: LateStruct> Sync for LateInstance<S> where
+    // `HashMap<TypeId, Box<S::EraseTo>>: Sync` iff `S::EraseTo: Sync`
+    S::EraseTo: Sync
+{
+}
+
+impl<S: LateStruct> fmt::Debug for LateInstance<S>
+where
+    S::EraseTo: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstance");
 
         for field in S::state().fields(self.init_token) {
-            let instance =
-                unsafe { &*field.as_debug()(self.data_base.add(field.offset()).as_ptr()) };
+            let instance = unsafe {
+                &*field.as_erased_unchecked::<S>(self.data_base.add(field.offset()).as_ptr())
+            };
 
-            f.field(field.type_name()(), instance);
+            f.field(field.key_type_name(), &instance);
         }
 
         f.finish()
@@ -443,12 +538,12 @@ impl<S: LateStruct> LateInstance<S> {
         // Initialize its fields
         let mut drop_guard = scopeguard::guard(0usize, |cnt| {
             for &field in &struct_fields[0..cnt] {
-                unsafe { field.drop()(data_base.add(field.offset()).as_ptr()) };
+                unsafe { field.drop(data_base.add(field.offset()).as_ptr()) };
             }
         });
 
         for &field in struct_fields {
-            unsafe { field.init()(data_base.add(field.offset()).as_ptr()) };
+            unsafe { field.init(data_base.add(field.offset()).as_ptr()) };
             *drop_guard += 1;
         }
 
@@ -462,6 +557,10 @@ impl<S: LateStruct> LateInstance<S> {
             data_base,
             cells: Box::from_iter((0..struct_fields.len()).map(|_| RefCell::new(()))),
         }
+    }
+
+    pub fn base_ptr(&self) -> NonNull<u8> {
+        self.data_base
     }
 
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
@@ -497,7 +596,7 @@ impl<S: LateStruct> Drop for LateInstance<S> {
         let struct_fields = S::state().fields(self.init_token);
 
         for field in struct_fields {
-            unsafe { field.drop()(self.data_base.add(field.offset()).as_ptr()) }
+            unsafe { field.drop(self.data_base.add(field.offset()).as_ptr()) }
         }
 
         unsafe { alloc::dealloc(self.data_base.as_ptr(), struct_layout) };
@@ -505,29 +604,36 @@ impl<S: LateStruct> Drop for LateInstance<S> {
 }
 
 #[repr(transparent)]
-pub struct LateInstanceDyn<S: LateStruct>(LateInstance<S>);
+pub struct LateInstanceDyn<S: LateStruct> {
+    _not_send_sync: PhantomData<*const ()>,
+    inner: LateInstance<S>,
+}
 
-impl<S: LateStruct> fmt::Debug for LateInstanceDyn<S> {
+impl<S: LateStruct> fmt::Debug for LateInstanceDyn<S>
+where
+    S::EraseTo: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("LateInstanceDynamic");
 
         for (field, cell) in S::state()
-            .fields(self.0.init_token)
+            .fields(self.inner.init_token)
             .iter()
-            .zip(&self.0.cells)
+            .zip(&self.inner.cells)
         {
             let _guard = match cell.try_borrow() {
                 Ok(v) => v,
                 Err(err) => {
-                    f.field(field.type_name()(), &err);
+                    f.field(field.key_type_name(), &err);
                     continue;
                 }
             };
 
-            let instance =
-                unsafe { &*field.as_debug()(self.0.data_base.add(field.offset()).as_ptr()) };
+            let instance = unsafe {
+                &*field.as_erased_unchecked::<S>(self.inner.data_base.add(field.offset()).as_ptr())
+            };
 
-            f.field(field.type_name()(), instance);
+            f.field(field.key_type_name(), &instance);
         }
 
         f.finish()
@@ -536,26 +642,27 @@ impl<S: LateStruct> fmt::Debug for LateInstanceDyn<S> {
 
 impl<S: LateStruct> LateInstanceDyn<S> {
     pub fn non_dynamic(&mut self) -> &mut LateInstance<S> {
-        &mut self.0
+        &mut self.inner
     }
 
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
-        self.0.get_ptr::<F>()
+        self.inner.get_ptr::<F>()
     }
 
     pub fn get_mut<F: LateField<S>>(&mut self) -> &mut F::Value {
-        self.0.get_mut::<F>()
+        self.inner.get_mut::<F>()
     }
 
     pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
-        Ref::map(self.0.cells[F::state().index()].borrow(), |()| unsafe {
+        Ref::map(self.inner.cells[F::state().index()].borrow(), |()| unsafe {
             self.get_ptr::<F>().as_ref()
         })
     }
 
     pub fn borrow_mut<F: LateField<S>>(&self) -> RefMut<'_, F::Value> {
-        RefMut::map(self.0.cells[F::state().index()].borrow_mut(), |()| unsafe {
-            self.get_ptr::<F>().as_mut()
-        })
+        RefMut::map(
+            self.inner.cells[F::state().index()].borrow_mut(),
+            |()| unsafe { self.get_ptr::<F>().as_mut() },
+        )
     }
 }
