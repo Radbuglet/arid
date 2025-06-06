@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, hash};
 
 use crate::{LateInstance, LateStruct};
 
@@ -60,5 +60,28 @@ where
             self.get_erased(field)
                 .dyn_eq(other.get_erased(field).as_any())
         })
+    }
+}
+
+// === DynHash === //
+
+pub trait DynHash {
+    fn dyn_hash(&self, hasher: &mut dyn hash::Hasher);
+}
+
+impl<T: hash::Hash> DynHash for T {
+    fn dyn_hash(&self, mut hasher: &mut dyn hash::Hasher) {
+        self.hash(&mut hasher);
+    }
+}
+
+impl<S: LateStruct> hash::Hash for LateInstance<S>
+where
+    S::EraseTo: DynHash,
+{
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        for field in self.fields() {
+            self.get_erased(field).dyn_hash(state);
+        }
     }
 }

@@ -93,6 +93,49 @@
 //!
 //! See the documentation of [`LateInstance`] for more ways to access the instance.
 //!
+//! Note that the "key type" used to refer to a given field can be distinct from its value type. For
+//! example, in the previous snippet, we could make `MyField` a zero-sized marker type and set it up
+//! to refer to a value of type `Vec<u32>` instead. We do this by changing our `late_field!` macro
+//! invocation like so...
+//!
+//! ```
+//! # mod dependency {
+//! #     use late_struct::{late_struct, LateInstance};
+//! #
+//! #     pub struct AppContext;
+//! #
+//! #     late_struct!(AppContext);
+//! #
+//! #     pub fn create_my_instance() -> LateInstance<AppContext> {
+//! #         LateInstance::new()
+//! #     }
+//! # }
+//! use dependency::{AppContext, create_my_instance};
+//! # use late_struct::late_field;
+//! #
+//!
+//! // The `#[non_exhaustive]` attribute helps ensure that other crates don't
+//! // accidentally try to instantiate what should just be a marker type.
+//! #[non_exhaustive]
+//! pub struct MyField;
+//!
+//! late_field!(MyField[AppContext] => Vec<u32>);
+//! //                              ^^^^^^^^^^^ this is how we specify the
+//! //                                          field's value type explicitly.
+//!
+//! pub fn example() {
+//!     let mut instance = create_my_instance();
+//!
+//!     // Notice that we're now accessing the `&mut Vec<u32>` directly
+//!     // rather than the `MyField` wrapper.
+//!     instance.get_mut::<MyField>().push(1);
+//!     instance.get_mut::<MyField>().push(2);
+//!     instance.get_mut::<MyField>().push(3);
+//!
+//!     eprintln!("Our numbers are {:?}", instance.get::<MyField>());
+//! }
+//! ```
+//!
 //! ## Advanced Usage
 //!
 //! By default, all fields of a given struct are required to implement [`Debug`], [`Default`], and
@@ -154,16 +197,56 @@
 //! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
 //! ```
 //!
-//! TODO: Document `DynEq` and `DynClone`.
+//! Struct members can be made to satisfy non-dyn-compatible standard traits such as [`Eq`],
+//! [`Hash`], and [`Clone`] by making the members implement the [`DynEq`], [`DynHash`], and
+//! [`DynClone`] traits respectively. This lets us write, for instance...
 //!
-//! Finally, we should note that field values can take on a different type than their "key" type.
+//! ```
+//! use std::{fmt::Debug, collections::HashSet};
+//! use late_struct::{late_field, late_struct, DynEq, DynHash, DynClone, LateInstance};
 //!
-//! TODO
+//! trait MyStructMember: Debug + DynEq + DynHash + DynClone {}
+//!
+//! impl<T> MyStructMember for T
+//! where
+//!     T: Debug + DynEq + DynHash + DynClone,
+//! {
+//! }
+//!
+//! struct MyStruct;
+//!
+//! late_struct!(MyStruct => dyn MyStructMember);
+//!
+//! #[derive(Debug, Clone, Hash, Eq, PartialEq, Default)]
+//! struct MyField(u32);
+//!
+//! late_field!(MyField[MyStruct]);
+//!
+//! fn demo() {
+//!     // The struct implements `Default`...
+//!     let my_instance = LateInstance::<MyStruct>::default();
+//!
+//!     // ...debug...
+//!     eprintln!("{my_instance:?}");
+//!
+//!     // ...clone...
+//!     let my_instance_2 = my_instance.clone();
+//!
+//!     // ...eq...
+//!     assert_eq!(my_instance, my_instance_2);
+//!
+//!     // ...and hash!
+//!     let mut map = HashSet::new();
+//!
+//!     assert!(map.insert(my_instance));
+//!     assert!(!map.insert(my_instance_2));
+//! }
+//! # demo();
+//! ```
 //!
 //! ## Internals and Performance
 //!
-//! Conceptually, a `LateInstance` could be thought of as a `HashMap<TypeId, Box<dyn Any>>`. In
-//! practice, however, TODO
+//! TODO
 //!
 
 mod descriptor;
