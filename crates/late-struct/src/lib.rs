@@ -10,7 +10,7 @@
 //!
 //! For example, let's say we had a crate hierarchy where "`dependent` depends on `dependency`."
 //!
-//! In `dependency`, we could define a new late-struct marker...
+//! In `dependency`, we could define a new late-struct marker using the [`late_struct!`] macro...
 //!
 //! ```
 //! use late_struct::late_struct;
@@ -22,7 +22,8 @@
 //! late_struct!(AppContext);
 //! ```
 //!
-//! ...and then, in `dependent`, we could proceed to add a field to it like so:
+//! ...and then, in `dependent`, we could proceed to add a field to it using the [`late_field!`]
+//! macro:
 //!
 //! ```
 //! # mod dependency {
@@ -40,7 +41,8 @@
 //! late_field!(MyField[AppContext]);
 //! ```
 //!
-//! Just note that the field value must implement [`Debug`], [`Default`], and live for `'static`.
+//! ...just note that, by default, the field value must implement [`Debug`], [`Default`], and live for
+//! `'static`.
 //!
 //! We can then refer to the structure we've created with a [`LateInstance`]. For example, back in
 //! `dependency`, we can write...
@@ -140,8 +142,8 @@
 //!
 //! By default, all fields of a given struct are required to implement [`Debug`], [`Default`], and
 //! `'static`. These requirements, however, can be changed on a per-struct basis. For instance, we
-//! can remove the [`Debug`] requirement and instead require [`Send`], [`Sync`], and a custom trait
-//! `Reflect` with the following `late_struct` definition...
+//! can remove the `Debug` requirement and instead require [`Send`], [`Sync`], and a custom trait
+//! `Reflect` with the following [`late_struct!`] definition...
 //!
 //! ```
 //! use late_struct::late_struct;
@@ -197,7 +199,7 @@
 //! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
 //! ```
 //!
-//! Struct members can be made to satisfy non-dyn-compatible standard traits such as [`Eq`],
+//! Struct members can also be made to satisfy non-dyn-compatible standard traits such as [`Eq`],
 //! [`Hash`], and [`Clone`] by making the members implement the [`DynEq`], [`DynHash`], and
 //! [`DynClone`] traits respectively. This lets us write, for instance...
 //!
@@ -244,10 +246,23 @@
 //! # demo();
 //! ```
 //!
-//! ## Internals and Performance
+//! ## Internals
 //!
-//! TODO
+//! Internally, each field we define with [`late_field!`] defines a `static` containing a
+//! [`LateFieldDescriptor`] and uses [`linkme`] to add it to a global list of all fields in the
+//! crate. When our first [`LateInstance`] is instantiated, all these `LateFieldDescriptor`s are
+//! collected and laid out into a structure at runtime, with each fields' offset being written back
+//! into an `AtomicUsize` in the `LateFieldDescriptor`.
 //!
+//! From there structure instantiation and field fetching works more-or-less like it would with a
+//! regular structure: `LateInstance` creates one big heap allocation for the structure it
+//! represents and initializes each field accordingly. To access a field, all we have to do is
+//! offset the structure's base pointer by the dynamically-initialized offset stored in the field's
+//! `LateFieldDescriptor`, making field accesses extremely cheap.
+//!
+//! Many of these internals are exposed. See [`LateStructDescriptor`] and [`LateFieldDescriptor`]
+//! (which you can obtain from the [`LateStruct::descriptor`] and [`LateField::descriptor`] methods
+//! respectively) to learn about various options for reflecting upon the layout of a structure.
 
 mod descriptor;
 pub use self::descriptor::*;
