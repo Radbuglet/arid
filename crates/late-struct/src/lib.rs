@@ -248,21 +248,22 @@
 //!
 //! ## Internals
 //!
-//! Internally, each field we define with [`late_field!`] defines a `static` containing a
+//! Internally, each field we define with [`late_field!`] creates a `static` containing a
 //! [`LateFieldDescriptor`] and uses [`linkme`] to add it to a global list of all fields in the
 //! crate. When our first [`LateInstance`] is instantiated, all these `LateFieldDescriptor`s are
 //! collected and laid out into a structure at runtime, with each fields' offset being written back
 //! into an `AtomicUsize` in the `LateFieldDescriptor`.
 //!
-//! From there structure instantiation and field fetching works more-or-less like it would with a
-//! regular structure: `LateInstance` creates one big heap allocation for the structure it
+//! From there, structure instantiation and field fetching work more-or-less like they would with a
+//! regular structure. `LateInstance` creates one big heap allocation for the structure it
 //! represents and initializes each field accordingly. To access a field, all we have to do is
 //! offset the structure's base pointer by the dynamically-initialized offset stored in the field's
 //! `LateFieldDescriptor`, making field accesses extremely cheap.
 //!
-//! Many of these internals are exposed. See [`LateStructDescriptor`] and [`LateFieldDescriptor`]
-//! (which you can obtain from the [`LateStruct::descriptor`] and [`LateField::descriptor`] methods
-//! respectively) to learn about various options for reflecting upon the layout of a structure.
+//! Many of these internals are exposed to the end user. See [`LateStructDescriptor`] and
+//! [`LateFieldDescriptor`] (which you can obtain from the [`LateStruct::descriptor`] and
+//! [`LateField::descriptor`] methods respectively) to learn about various options for reflecting
+//! upon the layout of a structure.
 
 mod descriptor;
 pub use self::descriptor::*;

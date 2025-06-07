@@ -4,27 +4,83 @@ use crate::{
 
 // === Trait Definitions === //
 
-pub unsafe trait LateStruct: Sized + 'static {
+/// A trait for a marker type representing a late-initialized structure.
+///
+/// This trait cannot be implemented manually. Instead, it should be implemented using the
+/// [`late_struct!`] macro.
+///
+/// ## Safety
+///
+/// This trait can only be safely implemented through the `late_struct!` macro.
+///
+pub unsafe trait LateStruct: Sized + 'static + LateStructSealed {
+    /// The type all fields are expected to coerce into.
+    ///
+    /// In the following invocation of [`late_struct!`]...
+    ///
+    /// ```
+    /// # use std::any::Any;
+    /// use late_struct::late_struct;
+    /// # pub struct MyType;
+    /// late_struct!(MyType => dyn Any + Send + Sync);
+    /// ```
+    ///
+    /// ...the type `<MyType as LateStruct>::EraseTo` would be `dyn Any + Send + Sync`.
+    ///
+    /// If no erase-to type is specified in an invocation of `late_struct!`, a default
+    /// `dyn 'static + fmt::Debug` type will be used.
     type EraseTo: ?Sized + 'static;
 
+    /// Fetches the untyped descriptor associated with this structure.
+    ///
+    /// See [`LateStruct::descriptor`] for a typed version of this method.
     fn raw_descriptor() -> &'static RawLateStructDescriptor;
 
+    /// Fetches the strongly-typed descriptor associated with this structure.
     fn descriptor() -> &'static LateStructDescriptor<Self> {
         unsafe { Self::raw_descriptor().typed_unchecked() }
     }
 }
 
-pub unsafe trait LateField<S: LateStruct>: Sized + 'static {
+/// A trait for a marker type representing a field in a late-initialized structure.
+///
+/// This trait cannot be implemented manually. Instead, it should be implemented using the
+/// [`late_field!`] macro.
+///
+/// ## Safety
+///
+/// This trait can only be safely implemented through the `late_field!` macro.
+///
+pub unsafe trait LateField<S: LateStruct>: Sized + 'static + LateFieldSealed<S> {
+    /// The type of this field's value.
     type Value: 'static + Default;
 
+    /// Fetches the untyped descriptor associated with this field.
+    ///
+    /// See [`LateField::descriptor`] for a typed version of this method.
     fn raw_descriptor() -> &'static RawLateFieldDescriptor;
 
+    /// Fetches the strongly-typed descriptor associated with this field.
     fn descriptor() -> &'static LateFieldDescriptor<S> {
         unsafe { Self::raw_descriptor().typed_unchecked() }
     }
 
+    /// Coerces a pointer to the field's concrete value to its unsized form expected used in
+    /// [`LateStruct::EraseTo`].
     fn coerce(value: *mut Self::Value) -> *mut S::EraseTo;
 }
+
+// === Sealed Traits === //
+
+pub mod sealed {
+    use super::LateStruct;
+
+    pub trait LateStructSealed {}
+
+    pub trait LateFieldSealed<S: LateStruct> {}
+}
+
+pub(crate) use sealed::{LateFieldSealed, LateStructSealed};
 
 // === Implementation Macros === //
 
@@ -33,11 +89,12 @@ pub mod late_macro_internals {
     use std::{any::TypeId, fmt};
 
     pub use {
+        super::sealed::{LateFieldSealed, LateStructSealed},
         crate::{
             LateField, LateStruct, RawLateFieldDescriptor, RawLateStructDescriptor, late_field,
             late_struct,
         },
-        linkme,
+        ::linkme,
     };
 
     pub type DefaultEraseTo = dyn 'static + fmt::Debug;
@@ -105,6 +162,8 @@ macro_rules! late_struct {
             static ENTRY: fn() -> $crate::late_macro_internals::LateStructEntry =
                 $crate::late_macro_internals::LateStructEntry::of::<$ty>;
 
+            impl $crate::late_macro_internals::LateStructSealed for $ty {}
+
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
                 type EraseTo = $erase_to;
 
@@ -135,6 +194,8 @@ macro_rules! late_field {
             #[linkme(crate = $crate::late_macro_internals::linkme)]
             static ENTRY: fn() -> $crate::late_macro_internals::LateFieldEntry =
                 $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
+
+            impl $crate::late_macro_internals::LateFieldSealed<$ns> for $ty {}
 
             unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
                 type Value = $val;
