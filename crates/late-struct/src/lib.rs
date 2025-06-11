@@ -249,10 +249,10 @@
 //! ## Internals
 //!
 //! Internally, each field we define with [`late_field!`] creates a `static` containing a
-//! [`LateFieldDescriptor`] and uses [`linkme`] to add it to a global list of all fields in the
-//! crate. When our first [`LateInstance`] is instantiated, all these `LateFieldDescriptor`s are
-//! collected and laid out into a structure at runtime, with each fields' offset being written back
-//! into an `AtomicUsize` in the `LateFieldDescriptor`.
+//! [`LateFieldDescriptor`] and uses [`linkme`] (or `inventory` on WebAssembly) to add it to a
+//! global list of all fields in the crate. When our first [`LateInstance`] is instantiated, all
+//! these `LateFieldDescriptor`s are collected and laid out into a structure at runtime, with each
+//! fields' offset being written back into an `AtomicUsize` in the `LateFieldDescriptor`.
 //!
 //! From there, structure instantiation and field fetching work more-or-less like they would with a
 //! regular structure. `LateInstance` creates one big heap allocation for the structure it

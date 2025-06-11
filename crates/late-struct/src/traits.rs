@@ -94,7 +94,6 @@ pub mod late_macro_internals {
             LateField, LateStruct, RawLateFieldDescriptor, RawLateStructDescriptor, late_field,
             late_struct,
         },
-        ::linkme,
     };
 
     pub type DefaultEraseTo = dyn 'static + fmt::Debug;
@@ -129,11 +128,41 @@ pub mod late_macro_internals {
         }
     }
 
-    #[linkme::distributed_slice]
-    pub static LATE_STRUCTS: [fn() -> LateStructEntry];
+    cfg_if::cfg_if! {
+        if #[cfg(target_family = "wasm")] {
+            pub use ::inventory;
 
-    #[linkme::distributed_slice]
-    pub static LATE_FIELDS: [fn() -> LateFieldEntry];
+            pub struct LateStructEntryWrapper(pub fn() -> LateStructEntry);
+            pub struct LateFieldEntryWrapper(pub fn() -> LateFieldEntry);
+
+            inventory::collect!(LateStructEntryWrapper);
+            inventory::collect!(LateFieldEntryWrapper);
+
+            pub fn iter_late_structs() -> impl Iterator<Item = LateStructEntry> {
+                inventory::iter::<LateStructEntryWrapper>().map(|f| f.0())
+            }
+
+            pub fn iter_late_fields() -> impl Iterator<Item = LateFieldEntry> {
+                inventory::iter::<LateFieldEntryWrapper>().map(|f| f.0())
+            }
+        } else {
+            pub use ::linkme;
+
+            #[linkme::distributed_slice]
+            pub static LATE_STRUCTS: [fn() -> LateStructEntry];
+
+            #[linkme::distributed_slice]
+            pub static LATE_FIELDS: [fn() -> LateFieldEntry];
+
+            pub fn iter_late_structs() -> impl Iterator<Item = LateStructEntry> {
+                LATE_STRUCTS.iter().map(|&f| f())
+            }
+
+            pub fn iter_late_fields() -> impl Iterator<Item = LateFieldEntry> {
+                LATE_FIELDS.iter().map(|&f| f())
+            }
+        }
+    }
 }
 
 #[macro_export]
@@ -155,13 +184,6 @@ macro_rules! late_struct {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateStructDescriptor =
                 $crate::late_macro_internals::RawLateStructDescriptor::new::<$ty>();
 
-            #[$crate::late_macro_internals::linkme::distributed_slice(
-                $crate::late_macro_internals::LATE_STRUCTS
-            )]
-            #[linkme(crate = $crate::late_macro_internals::linkme)]
-            static ENTRY: fn() -> $crate::late_macro_internals::LateStructEntry =
-                $crate::late_macro_internals::LateStructEntry::of::<$ty>;
-
             impl $crate::late_macro_internals::LateStructSealed for $ty {}
 
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
@@ -171,6 +193,21 @@ macro_rules! late_struct {
                     &DESCRIPTOR
                 }
             }
+
+            #[cfg(target_family = "wasm")]
+            $crate::late_macro_internals::inventory::submit! {
+                $crate::late_macro_internals::LateStructEntryWrapper(
+                    $crate::late_macro_internals::LateStructEntry::of::<$ty>,
+                )
+            }
+
+            #[cfg(not(target_family = "wasm"))]
+            #[$crate::late_macro_internals::linkme::distributed_slice(
+                $crate::late_macro_internals::LATE_STRUCTS
+            )]
+            #[linkme(crate = $crate::late_macro_internals::linkme)]
+            static ENTRY: fn() -> $crate::late_macro_internals::LateStructEntry =
+                $crate::late_macro_internals::LateStructEntry::of::<$ty>;
         };
     };
 }
@@ -188,13 +225,6 @@ macro_rules! late_field {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateFieldDescriptor =
                 $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $ty>();
 
-            #[$crate::late_macro_internals::linkme::distributed_slice(
-                $crate::late_macro_internals::LATE_FIELDS
-            )]
-            #[linkme(crate = $crate::late_macro_internals::linkme)]
-            static ENTRY: fn() -> $crate::late_macro_internals::LateFieldEntry =
-                $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
-
             impl $crate::late_macro_internals::LateFieldSealed<$ns> for $ty {}
 
             unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
@@ -208,6 +238,21 @@ macro_rules! late_field {
                     value
                 }
             }
+
+            #[cfg(target_family = "wasm")]
+            $crate::late_macro_internals::inventory::submit! {
+                $crate::late_macro_internals::LateFieldEntryWrapper(
+                    $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>,
+                )
+            }
+
+            #[cfg(not(target_family = "wasm"))]
+            #[$crate::late_macro_internals::linkme::distributed_slice(
+                $crate::late_macro_internals::LATE_FIELDS
+            )]
+            #[linkme(crate = $crate::late_macro_internals::linkme)]
+            static ENTRY: fn() -> $crate::late_macro_internals::LateFieldEntry =
+                $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
         };
     };
 }

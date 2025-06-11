@@ -26,7 +26,7 @@ impl LateLayoutInitToken {
         static ONCE: Once = Once::new();
 
         ONCE.call_once(|| {
-            use crate::late_macro_internals::{LATE_FIELDS, LATE_STRUCTS};
+            use crate::late_macro_internals::{iter_late_fields, iter_late_structs};
 
             let mut structs = HashMap::<
                 TypeId,
@@ -36,15 +36,11 @@ impl LateLayoutInitToken {
                 ),
             >::new();
 
-            for entry in LATE_STRUCTS {
-                let entry = entry();
-
+            for entry in iter_late_structs() {
                 structs.insert(entry.struct_type, (entry.descriptor, Vec::new()));
             }
 
-            for entry in LATE_FIELDS {
-                let entry = entry();
-
+            for entry in iter_late_fields() {
                 structs
                     .get_mut(&entry.struct_type)
                     .unwrap()
