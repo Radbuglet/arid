@@ -86,7 +86,9 @@ pub(crate) use sealed::{LateFieldSealed, LateStructSealed};
 
 #[doc(hidden)]
 pub mod late_macro_internals {
-    use std::{any::TypeId, fmt};
+    use std::{any::TypeId, fmt, marker::PhantomData};
+
+    // === Re-exports === //
 
     pub use {
         super::sealed::{LateFieldSealed, LateStructSealed},
@@ -97,6 +99,30 @@ pub mod late_macro_internals {
     };
 
     pub type DefaultEraseTo = dyn 'static + fmt::Debug;
+
+    // === OrDefault === //
+
+    pub type OrDefault<Default, T = Default> =
+        <OrDefaultHelper<T, Default> as OrDefaultHelperTrait>::Out;
+
+    pub struct OrDefaultHelper<T, Ignore>(PhantomData<T>, PhantomData<Ignore>)
+    where
+        T: ?Sized,
+        Ignore: ?Sized;
+
+    pub trait OrDefaultHelperTrait {
+        type Out: ?Sized;
+    }
+
+    impl<T, Ignore> OrDefaultHelperTrait for OrDefaultHelper<T, Ignore>
+    where
+        T: ?Sized,
+        Ignore: ?Sized,
+    {
+        type Out = T;
+    }
+
+    // === Entry management === //
 
     #[derive(Debug, Copy, Clone)]
     pub struct LateStructEntry {
@@ -165,21 +191,18 @@ pub mod late_macro_internals {
     }
 }
 
+/// Implements the [`LateStruct`] trait for the specified `$ty` type. This type need only be
+/// [`Sized`] and live for `'static`.
+///
+/// The optional `$erase_to` type specifies the type all field values should be able to upcast
+/// (i.e. "erase") to. For instance, if you specify `dyn Any + Send + Sync`, all field values will
+/// have to implement [`Any`](std::any::Any), [`Send`], and [`Sync`]. If `erase_to` is omitted, the
+/// type will default to `dyn 'static + fmt::Debug`.
+///
+/// See the [crate level documentation](crate) for examples of this macro in action.
 #[macro_export]
 macro_rules! late_struct {
-    ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {
-        $(
-            $crate::late_macro_internals::late_struct!(
-                @single $ty $(=> $erase_to)?
-            );
-        )*
-    };
-    (@single $ty:ty) => {
-        $crate::late_macro_internals::late_struct!(
-            @single $ty => $crate::late_macro_internals::DefaultEraseTo
-        );
-    };
-    (@single $ty:ty => $erase_to:ty) => {
+    ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {$(
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateStructDescriptor =
                 $crate::late_macro_internals::RawLateStructDescriptor::new::<$ty>();
@@ -187,7 +210,10 @@ macro_rules! late_struct {
             impl $crate::late_macro_internals::LateStructSealed for $ty {}
 
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
-                type EraseTo = $erase_to;
+                type EraseTo = $crate::late_macro_internals::OrDefault<
+                    $crate::late_macro_internals::DefaultEraseTo,
+                    $(, $erase_to)?
+                >;
 
                 fn raw_descriptor() -> &'static $crate::late_macro_internals::RawLateStructDescriptor {
                     &DESCRIPTOR
@@ -209,18 +235,15 @@ macro_rules! late_struct {
             static ENTRY: fn() -> $crate::late_macro_internals::LateStructEntry =
                 $crate::late_macro_internals::LateStructEntry::of::<$ty>;
         };
-    };
+    )*};
 }
 
 #[macro_export]
 macro_rules! late_field {
-    ($($ty:ty [$ns:ty] $(=> $val:ty)?),*$(,)?) => {$(
-        $crate::late_macro_internals::late_field!(@single $ty [$ns] $(=> $val)?);
-    )*};
-    (@single $ty:ty [$ns:ty]) => {
-        $crate::late_macro_internals::late_field!(@single $ty [$ns] => $ty);
-    };
-    (@single $ty:ty [$ns:ty] => $val:ty) => {
+    (
+        $($ty:ty [$ns:ty] $(=> $val:ty)?),*
+        $(,)?
+    ) => {$(
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateFieldDescriptor =
                 $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $ty>();
@@ -228,7 +251,7 @@ macro_rules! late_field {
             impl $crate::late_macro_internals::LateFieldSealed<$ns> for $ty {}
 
             unsafe impl $crate::late_macro_internals::LateField<$ns> for $ty {
-                type Value = $val;
+                type Value = $crate::late_macro_internals::OrDefault<$ty $(, $val)?>;
 
                 fn raw_descriptor() -> &'static $crate::late_macro_internals::RawLateFieldDescriptor {
                     &DESCRIPTOR
@@ -254,5 +277,5 @@ macro_rules! late_field {
             static ENTRY: fn() -> $crate::late_macro_internals::LateFieldEntry =
                 $crate::late_macro_internals::LateFieldEntry::of::<$ns, $ty>;
         };
-    };
+    )*};
 }
