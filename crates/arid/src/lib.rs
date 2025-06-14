@@ -10,8 +10,8 @@ mod utils;
 
 pub mod prelude {
     pub use crate::{
-        entity::{Component, Entity, Handle, Obj, Val, component},
-        erased::ErasedHandle,
+        entity::{Component, Entity, Handle, component},
+        erased::{Erased, ErasedHandle, erased},
         query::{Query, query_removed},
         world::{W, World, WorldDebug, Wr},
     };

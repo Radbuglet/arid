@@ -56,30 +56,27 @@ pub(crate) fn can_format_entity(entity: Entity) -> bool {
     })
 }
 
-pub(crate) fn can_format_obj<T: Handle>(obj: T) -> bool {
+pub(crate) fn can_format_handle<T: Handle>(handle: T) -> bool {
     FMT_REENTRANCY.with(|v| {
         let mut v = v.borrow_mut();
         let v = v
             .as_mut()
-            .expect("cannot call `can_format_obj` without a bound immutable world");
+            .expect("cannot call `can_format_handle` without a bound immutable world");
 
         v.objects
-            .insert((ComponentId::of::<T::Component>(), obj.raw()))
+            .insert((ComponentId::of::<T::Component>(), handle.raw()))
     })
 }
 
 // === Component === //
 
-pub type Obj<T> = <T as Component>::Handle;
-pub type Val<T> = <T as Handle>::Component;
-
-pub trait Component:
+pub unsafe trait Component:
     'static + Sized + fmt::Debug + LateField<World, Value = Storage<Self>>
 {
     type Handle: Handle<Component = Self>;
 }
 
-pub trait Handle: Sized + 'static + fmt::Debug + Copy + Eq + Ord {
+pub unsafe trait Handle: Sized + 'static + fmt::Debug + Copy + Eq + Ord {
     type Component: Component<Handle = Self>;
 
     const DANGLING: Self;
@@ -140,7 +137,7 @@ pub trait Handle: Sized + 'static + fmt::Debug + Copy + Eq + Ord {
 
 #[doc(hidden)]
 pub mod component_internals {
-    use super::can_format_obj;
+    use super::can_format_handle;
 
     pub use {
         crate::{
@@ -153,15 +150,15 @@ pub mod component_internals {
         thunderdome::Index,
     };
 
-    pub fn format_obj<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
+    pub fn format_handle<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
         let index = handle.raw().to_bits();
 
         World::try_fetch_tls_ref(|world| {
-            if let Some(Ok(world)) = world.filter(|_| can_format_obj::<T>(handle)) {
+            if let Some(Ok(world)) = world.filter(|_| can_format_handle::<T>(handle)) {
                 let storage = world.resource::<T::Component>();
 
                 if let Some((_owner, value)) = storage.arena.get(handle.raw()) {
-                    f.debug_tuple("Obj")
+                    f.debug_tuple("Handle")
                         .field(&format_args!("0x{index:x}"))
                         .field(value)
                         .finish()
@@ -172,13 +169,13 @@ pub mod component_internals {
                             f.write_str("<dead>")
                         }
                     }
-                    f.debug_tuple("Obj")
+                    f.debug_tuple("Handle")
                         .field(&format_args!("0x{index:x}"))
                         .field(&Dead)
                         .finish()
                 }
             } else {
-                f.debug_tuple("Obj")
+                f.debug_tuple("Handle")
                     .field(&format_args!("0x{index:x}"))
                     .finish()
             }
@@ -191,20 +188,21 @@ macro_rules! component {
     ($($name:ident),*$(,)?) => {$(
         $crate::entity::component_internals::paste! {
             #[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-            pub struct [<Obj $name>] {
+            #[repr(transparent)]
+            pub struct [<$name Handle>] {
                 pub raw: $crate::entity::component_internals::Index,
             }
 
-            impl $crate::entity::component_internals::fmt::Debug for [<Obj $name>] {
+            impl $crate::entity::component_internals::fmt::Debug for [<$name Handle>] {
                 fn fmt(
                     &self,
                     f: &mut $crate::entity::component_internals::fmt::Formatter<'_>,
                 ) -> $crate::entity::component_internals::fmt::Result {
-                    $crate::entity::component_internals::format_obj(f, *self)
+                    $crate::entity::component_internals::format_handle(f, *self)
                 }
             }
 
-            impl [<Obj $name>] {
+            impl [<$name Handle>] {
                 pub const DANGLING: Self =
                     Self::wrap_raw($crate::entity::component_internals::Index::DANGLING);
 
@@ -217,11 +215,11 @@ macro_rules! component {
                 }
             }
 
-            impl $crate::entity::component_internals::Component for $name {
-                type Handle = [<Obj $name>];
+            unsafe impl $crate::entity::component_internals::Component for $name {
+                type Handle = [<$name Handle>];
             }
 
-            impl $crate::entity::component_internals::Handle for [<Obj $name>] {
+            unsafe impl $crate::entity::component_internals::Handle for [<$name Handle>] {
                 type Component = $name;
 
                 const DANGLING: Self = Self::DANGLING;
@@ -556,7 +554,7 @@ impl Entity {
             hash_map::Entry::Vacant(entry) => entry,
         };
 
-        // Otherwise, create the new `Obj`...
+        // Otherwise, create the new `Handle`...
         let handle = storage.arena.insert((self, value));
         entry.insert(handle);
 
@@ -606,8 +604,8 @@ impl Entity {
         let mut iter = Some(self);
 
         while let Some(curr) = iter {
-            if let Some(obj) = curr.try_get::<T>(w) {
-                return Some(obj);
+            if let Some(handle) = curr.try_get::<T>(w) {
+                return Some(handle);
             }
 
             iter = self.parent(w);
@@ -652,9 +650,9 @@ impl Entity {
     pub(crate) fn remove_from_storage<T: Component>(self, w: &mut World) -> Option<T> {
         let storage = w.resource_mut::<T>();
 
-        let obj = storage.entity_map.remove(&self)?;
+        let handle = storage.entity_map.remove(&self)?;
 
-        Some(storage.arena.remove(obj).unwrap().1)
+        Some(storage.arena.remove(handle).unwrap().1)
     }
 
     pub fn destroy(self, w: &mut World) {
