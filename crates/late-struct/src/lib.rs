@@ -1,7 +1,7 @@
 //! Late-bound structure definitions.
 //!
-//! This crate exposes the [`late_struct`] macro, which defines a structure whose set of fields
-//! can be extended by any crate within a compiled artifact using the [`late_field`] macro.
+//! This crate exposes the [`late_struct!`] macro, which defines a structure whose set of fields
+//! can be extended by any crate within a compiled artifact using the [`late_field!`] macro.
 //! Unlike regular structures, dependents on the crate which originally defined the structure are
 //! allowed to extend it. Additionally, the structure we defined can be instantiated in any crate
 //! using a [`LateInstance`], even if dependents of that crate are still extending it.
@@ -41,8 +41,8 @@
 //! late_field!(MyField[AppContext]);
 //! ```
 //!
-//! ...just note that, by default, the field value must implement [`Debug`], [`Default`], and live for
-//! `'static`.
+//! ...just note that, by default, the field value must implement [`Debug`](std::fmt::Debug),
+//! [`Default`], and live for `'static`.
 //!
 //! We can then refer to the structure we've created with a [`LateInstance`]. For example, back in
 //! `dependency`, we can write...
@@ -140,10 +140,10 @@
 //!
 //! ## Advanced Usage
 //!
-//! By default, all fields of a given struct are required to implement [`Debug`], [`Default`], and
-//! `'static`. These requirements, however, can be changed on a per-struct basis. For instance, we
-//! can remove the `Debug` requirement and instead require [`Send`], [`Sync`], and a custom trait
-//! `Reflect` with the following [`late_struct!`] definition...
+//! By default, all fields of a given struct are required to implement [`Debug`](std::fmt::Debug),
+//! [`Default`], and `'static`. These requirements, however, can be changed on a per-struct basis.
+//! For instance, we can remove the `Debug` requirement and instead require [`Send`], [`Sync`], and
+//! a custom trait `Reflect` with the following [`late_struct!`] definition...
 //!
 //! ```
 //! use late_struct::late_struct;
@@ -159,11 +159,12 @@
 //! //                    field value types must upcast to this type
 //! ```
 //!
-//! The only mandatory requirements of a field are that it have a [`Default`] initializer, be
+//! The only mandatory trait bounds on a field are that it have a [`Default`] initializer, be
 //! [`Sized`], and live for `'static`.
 //!
-//! We can access the erased forms of these fields using the [`LateInstance::fields`],
-//! [`LateInstance::get_erased`], and [`LateInstance::get_erased_mut`] methods like so...
+//! We can then enumerate these fields at runtime using the [`LateInstance::fields`] method and
+//! access those fields' erased values using the [`LateInstance::get_erased`], and
+//! [`LateInstance::get_erased_mut`] methods like so...
 //!
 //! ```
 //! # use late_struct::{late_field, late_struct, LateInstance};
@@ -201,9 +202,9 @@
 //! # say_greetings_on_a_thread(Arc::new(LateInstance::new()));
 //! ```
 //!
-//! Struct members can also be made to satisfy non-dyn-compatible standard traits such as [`Eq`],
-//! [`Hash`], and [`Clone`] by making the members implement the [`DynEq`], [`DynHash`], and
-//! [`DynClone`] traits respectively. This lets us write, for instance...
+//! Struct members can also be made to satisfy non-[`dyn` compatible] standard traits such
+//! as [`Eq`], [`Hash`], and [`Clone`] by making the members implement the [`DynEq`], [`DynHash`],
+//! and [`DynClone`] traits respectively. This lets us write, for instance...
 //!
 //! ```
 //! use std::{fmt::Debug, collections::HashSet};
@@ -266,6 +267,8 @@
 //! [`LateFieldDescriptor`] (which you can obtain from the [`LateStruct::descriptor`] and
 //! [`LateField::descriptor`] methods respectively) to learn about various options for reflecting
 //! upon the layout of a structure.
+//!
+//! [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 
 #![forbid(missing_docs)]
 

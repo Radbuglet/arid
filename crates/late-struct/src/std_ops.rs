@@ -18,14 +18,14 @@ mod sealed {
 /// implementation of [`Clone`]. If `LateStruct::EraseTo` implements this trait, the
 /// [`LateInstance`] instantiating that structure will implement `Clone`.
 ///
-/// This trait is implemented for all types which implement `Clone`. Unlike `Eq`, however, it is
-/// [`dyn` compatible](dyn-compat).
+/// This trait is implemented for all types which implement `Clone`. Unlike `Clone`, however, it is
+/// [`dyn` compatible].
 ///
 /// ## Safety
 ///
 /// This trait is sealed and no downstream crates can implement it.
 ///
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 pub unsafe trait DynClone: sealed::DynCloneSealed {
     #[doc(hidden)]
     unsafe fn dyn_clone_into(&self, other: *mut u8);
@@ -59,11 +59,11 @@ where
 /// [`LateInstance`] instantiating that structure will implement `Eq`.
 ///
 /// This trait is implemented for all types which implement `Eq<Self>`. Unlike `Eq<Self>`, however,
-/// it is [`dyn` compatible](dyn-compat).
+/// it is [`dyn` compatible].
 ///
 /// This trait is sealed and no downstream crates can implement it.
 ///
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 pub trait DynEq: DynPartialEq + sealed::DynEqSealed {}
 
 /// A bound for the [`LateStruct::EraseTo`] associated type which asserts that fields must have an
@@ -71,11 +71,11 @@ pub trait DynEq: DynPartialEq + sealed::DynEqSealed {}
 /// the [`LateInstance`] instantiating that structure will implement `PartialEq`.
 ///
 /// This trait is implemented for all types which implement `PartialEq<Self>`. Unlike
-/// `PartialEq<Self>`, however, it is [`dyn` compatible](dyn-compat).
+/// `PartialEq<Self>`, however, it is [`dyn` compatible].
 ///
 /// This trait is sealed and no downstream crates can implement it.
 ///
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 pub trait DynPartialEq: Any + sealed::DynPartialEqSealed {
     #[doc(hidden)]
     fn dyn_eq(&self, other: &dyn Any) -> bool;
@@ -121,11 +121,11 @@ where
 /// instantiating that structure will implement `Hash`.
 ///
 /// This trait is implemented for all types which implement `Hash`. Unlike `Hash`, however,
-/// it is [`dyn` compatible](dyn-compat).
+/// it is [`dyn` compatible].
 ///
 /// This trait is sealed and no downstream crates can implement it.
 ///
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 pub trait DynHash: sealed::DynHashSealed {
     #[doc(hidden)]
     fn dyn_hash(&self, hasher: &mut dyn hash::Hasher);

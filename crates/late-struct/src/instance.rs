@@ -45,7 +45,7 @@ use crate::{LateField, LateFieldDescriptor, LateLayoutInitToken, LateStruct};
 ///
 /// - `'static` and [`Default`], although since all fields are always required to implement these
 ///   two traits, so too will [`LateInstance`].
-/// - [`Send`], [`Sync`], and [`Debug`] are all perfectly structural w.r.t `S::EraseTo`.
+/// - [`Send`], [`Sync`], and [`Debug`](fmt::Debug) are all perfectly structural w.r.t `S::EraseTo`.
 /// - [`Eq`] is implemented if `S::EraseTo` implements [`DynEq`](super::DynEq).
 /// - [`PartialEq`] is implemented if `S::EraseTo` implements [`DynPartialEq`](super::DynPartialEq).
 /// - [`Clone`] is implemented if `S::EraseTo` implements [`DynClone`](super::DynClone).
@@ -59,11 +59,11 @@ use crate::{LateField, LateFieldDescriptor, LateLayoutInitToken, LateStruct};
 /// structure is not defined.
 ///
 /// By default, `S::EraseTo` is set to `dyn 'static + fmt::Debug`. This implies that the
-/// `LateInstance` instantiating that `S` will implement [`Debug`] but will not implement, e.g.,
-/// `Send` or `Sync`. See [this section](index.html#advanced-usage) of the crate level documentation
-/// for information on how to change these bounds.
+/// `LateInstance` instantiating that `S` will implement [`Debug`](fmt::Debug) but will not
+/// implement, e.g., `Send` or `Sync`. See [this section](index.html#advanced-usage) of the crate
+/// level documentation for information on how to change these bounds.
 ///
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [dyn-compat]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 pub struct LateInstance<S: LateStruct> {
     _ty: PhantomData<fn(S) -> S>,
 

@@ -30,7 +30,7 @@ pub unsafe trait LateStruct: Sized + 'static + LateStructSealed {
     /// If no erase-to type is specified in an invocation of `late_struct!`, a default
     /// `dyn 'static + fmt::Debug` type will be used.
     ///
-    /// [trait object]: https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object
+    /// [trait object]: https://doc.rust-lang.org/1.87.0/reference/types/trait-object.html#r-type.trait-object
     type EraseTo: ?Sized + 'static;
 
     /// Fetches the untyped descriptor associated with this structure.
@@ -231,23 +231,26 @@ pub mod late_macro_internals {
 /// "erase") to. Generally, this type is a [trait object]. For instance, if you specify `dyn Any +
 /// Send + Sync`, all field values will have to implement [`Any`](std::any::Any), [`Send`], and
 /// [`Sync`]. If `$erase_to` is omitted, the type will default to `dyn 'static + fmt::Debug`, which
-/// would entail that all fields in the struct must implement the [`Debug`] trait.
+/// would entail that all fields in the struct must implement the [`Debug`](std::fmt::Debug) trait.
 ///
 /// In addition to the trait constraints `$erased_to` places on fields, `late_field!` automatically
 /// enforces that all fields live for `'static`, be [`Sized`], and implement the [`Default`] trait.
 /// It is this `Default` trait implementation which is used to initialize instances of this struct.
 ///
-/// Traits such as [`Eq`], [`Clone`], and [`Hash`] are not [`dyn` compatible](dyn-compat) and thus
-/// cannot be used directly inside the bounds of the `$erase_to` type. You can work around this
-/// restriction by using the [`DynEq`](super::DynEq), [`DynClone`](super::DynClone), and
+/// Traits such as [`Eq`], [`Clone`], and [`Hash`] are not [`dyn` compatible] and thus cannot be
+/// used directly inside the bounds of the `$erase_to` type. You can work around this restriction by
+/// using the [`DynEq`](super::DynEq), [`DynClone`](super::DynClone), and
 /// [`DynHash`](super::DynHash) traits respectively, which are `dyn` compatible while still encoding
 /// the necessary constraints.
 ///
-/// [trait object]: https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object
-/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
+/// [trait object]: https://doc.rust-lang.org/1.87.0/reference/types/trait-object.html#r-type.trait-object
+/// [`dyn` compatible]: https://doc.rust-lang.org/1.87.0/reference/items/traits.html#r-items.traits.dyn-compatible
 #[macro_export]
 macro_rules! late_struct {
-    ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {$(
+    (
+        $($ty:ty $(=> $erase_to:ty)?),*
+        $(,)?
+    ) => {$(
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateStructDescriptor =
                 $crate::late_macro_internals::new_late_struct_descriptor::<$ty>();
@@ -256,7 +259,7 @@ macro_rules! late_struct {
 
             unsafe impl $crate::late_macro_internals::LateStruct for $ty {
                 type EraseTo = $crate::late_macro_internals::OrDefault<
-                    $crate::late_macro_internals::DefaultEraseTo,
+                    $crate::late_macro_internals::DefaultEraseTo
                     $(, $erase_to)?
                 >;
 
@@ -299,7 +302,7 @@ macro_rules! late_struct {
 /// fields of a [`LateInstance`](super::LateInstance). In addition, the field value must be able to
 /// coerce into the `$ns` structure type's [`LateStruct::EraseTo`] associated type. By default, the
 /// `LateStruct::EraseTo` associated type is set to `dyn 'static + fmt::Debug` and thus `$val` will
-/// be expected to implement [`Debug`] as well.
+/// be expected to implement [`Debug`](std::fmt::Debug) as well.
 ///
 /// If `$val` is distinct from `$ty`, the `$ty` type need only be [`Sized`] and live for `'static`.
 ///
