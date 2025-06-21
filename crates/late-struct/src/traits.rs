@@ -7,16 +7,16 @@ use crate::{
 /// A trait for a marker type representing a late-initialized structure.
 ///
 /// This trait cannot be implemented manually. Instead, it should be implemented using the
-/// [`late_struct!`] macro.
+/// [`late_struct!`](crate::late_struct) macro. Most documentation for this trait can be found there.
 ///
 /// ## Safety
 ///
 /// This trait can only be safely implemented through the `late_struct!` macro.
 ///
 pub unsafe trait LateStruct: Sized + 'static + LateStructSealed {
-    /// The type all fields are expected to coerce into.
+    /// The type all fields are expected to coerce into. This is usually a [trait object].
     ///
-    /// In the following invocation of [`late_struct!`]...
+    /// In the following invocation of [`late_struct!`](crate::late_struct)...
     ///
     /// ```
     /// # use std::any::Any;
@@ -29,6 +29,8 @@ pub unsafe trait LateStruct: Sized + 'static + LateStructSealed {
     ///
     /// If no erase-to type is specified in an invocation of `late_struct!`, a default
     /// `dyn 'static + fmt::Debug` type will be used.
+    ///
+    /// [trait object]: https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object
     type EraseTo: ?Sized + 'static;
 
     /// Fetches the untyped descriptor associated with this structure.
@@ -45,7 +47,7 @@ pub unsafe trait LateStruct: Sized + 'static + LateStructSealed {
 /// A trait for a marker type representing a field in a late-initialized structure.
 ///
 /// This trait cannot be implemented manually. Instead, it should be implemented using the
-/// [`late_field!`] macro.
+/// [`late_field!`](crate::late_field) macro. Most documentation for this trait can be found there.
 ///
 /// ## Safety
 ///
@@ -72,7 +74,7 @@ pub unsafe trait LateField<S: LateStruct>: Sized + 'static + LateFieldSealed<S> 
 
 // === Sealed Traits === //
 
-pub mod sealed {
+mod sealed {
     use super::LateStruct;
 
     pub trait LateStructSealed {}
@@ -191,15 +193,39 @@ pub mod late_macro_internals {
     }
 }
 
-/// Implements the [`LateStruct`] trait for the specified `$ty` type. This type need only be
-/// [`Sized`] and live for `'static`.
+/// Implements the [`LateStruct`] trait for the specified `$ty` type, turing it into a marker type
+/// that can be used to refer to a late-initialized structure. The `$ty` type need only be [`Sized`]
+/// and live for `'static`.
 ///
-/// The optional `$erase_to` type specifies the type all field values should be able to upcast
-/// (i.e. "erase") to. For instance, if you specify `dyn Any + Send + Sync`, all field values will
-/// have to implement [`Any`](std::any::Any), [`Send`], and [`Sync`]. If `erase_to` is omitted, the
-/// type will default to `dyn 'static + fmt::Debug`.
+/// You can attach fields onto this type using the [`late_field!`](crate::late_field) macro and can
+/// instantiate the structure defined by this macro using the [`LateInstance`](super::LateInstance)
+/// struct. Either operation can occur anywhere within the crate graph of a project; fields can be
+/// added to the structure in crates which are downstream to crates which instantiate that
+/// structure.
+///
+/// The optional `$erase_to` type specifies the type all field values should be able to upcast (i.e.
+/// "erase") to. Generally, this type is a [trait object]. For instance, if you specify `dyn Any +
+/// Send + Sync`, all field values will have to implement [`Any`](std::any::Any), [`Send`], and
+/// [`Sync`]. If `$erase_to` is omitted, the type will default to `dyn 'static + fmt::Debug`, which
+/// would entail that all fields in the struct must implement the [`Debug`] trait.
+///
+/// In addition to the trait constraints `$erased_to` places on fields, `late_field!` automatically
+/// enforces that all fields live for `'static`, be [`Sized`], and implement the [`Default`] trait.
+/// It is this `Default` trait implementation which is used to initialize instances of this struct.
+///
+/// Traits such as [`Eq`], [`Clone`], and [`Hash`] are not [`dyn` compatible](dyn-compat) and thus
+/// cannot be used directly inside the bounds of the `$erase_to` type. You can work around this
+/// restriction by using the [`DynEq`](super::DynEq), [`DynClone`](super::DynClone), and
+/// [`DynHash`](super::DynHash) traits respectively, which are `dyn` compatible while still encoding
+/// the necessary constraints.
+///
+/// You can specify more than one type onto which `LateStruct` should be implemented with this
+/// macro.
 ///
 /// See the [crate level documentation](crate) for examples of this macro in action.
+///
+/// [trait object]: https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object
+/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
 #[macro_export]
 macro_rules! late_struct {
     ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {$(
@@ -238,6 +264,27 @@ macro_rules! late_struct {
     )*};
 }
 
+/// Implements the [`LateField`] trait for the specified `$ty` type, turning it into a marker type
+/// that can be used to refer to a field within a late-initialized structure.
+///
+/// The `$ns type` specifies a [`LateStruct`] (defined by an earlier
+/// [`late_struct!`](crate::late_struct) invocation) into which this field will be placed. The
+/// optional `$val` type specifies the type of the value this field stores. If `$val` is omitted, it
+/// will default to `$ty`.
+///
+/// `$val` (or `$ty`, if `$val` is omitted) is expected to live for `'static`, be [`Sized`], and
+/// implement [`Default`]. It is this `Default` trait implementation which is used to initialize the
+/// fields of a [`LateInstance`](super::LateInstance). In addition, the field value must be able to
+/// coerce into the `$ns` structure type's [`LateStruct::EraseTo`] associated type. By default, the
+/// `LateStruct::EraseTo` associated type is set to `dyn 'static + fmt::Debug` and thus `$val` will
+/// be expected to implement [`Debug`] as well.
+///
+/// If `$val` is distinct from `$ty`, the `$ty` type need only be [`Sized`] and live for `'static`.
+///
+/// You can specify more than one type onto which `LateField` should be implemented with this
+/// macro.
+///
+/// See the [crate level documentation](crate) for examples of this macro in action.
 #[macro_export]
 macro_rules! late_field {
     (
