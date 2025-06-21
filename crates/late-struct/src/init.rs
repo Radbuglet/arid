@@ -7,6 +7,12 @@ use std::{
 
 use crate::{RawLateFieldDescriptor, RawLateStructDescriptor};
 
+/// A marker type indicating that the layouts for all [`late_struct!`](super::late_struct)s
+/// throughout the compiled artifact have been determined at runtime.
+///
+/// This initialization process happens automatically upon the first instantiation of a
+/// [`LateInstance`](super::LateInstance). Indeed, you can use the [`init_token`](super::LateInstance::init_token)
+/// method of a `LateInstance` to obtain an instance of this struct for free.
 #[derive(Debug, Copy, Clone)]
 #[non_exhaustive]
 pub struct LateLayoutInitToken;
@@ -18,10 +24,12 @@ impl Default for LateLayoutInitToken {
 }
 
 impl LateLayoutInitToken {
-    pub unsafe fn new_unchecked() -> Self {
-        Self
-    }
-
+    /// Resolves all late-initialized structures in the compiled artifact and returns a token
+    /// attesting to this fact. The late initialization process only happens once during the
+    /// program's lifetime.
+    ///
+    /// The late-initialization routine does not makes uncontrolled calls to user-controlled
+    /// functions.
     pub fn new() -> Self {
         static ONCE: Once = Once::new();
 
@@ -67,6 +75,21 @@ impl LateLayoutInitToken {
             }
         });
 
+        Self
+    }
+
+    /// Unsafely asserts that the layout for all late-initialized structures in the compiled
+    /// artifact have already been resolved.
+    ///
+    /// Unless you have specific performance reasons to do so, you should probably be using
+    /// [`LateLayoutInitToken::new`].
+    ///
+    /// ## Safety
+    ///
+    /// Although this method cannot, by itself, cause undefined behavior, passing this object to a
+    /// method which expects the layout of late-initialized structure to already be resolved when
+    /// the layouts are not yet resolved could easily cause undefined behavior.
+    pub const unsafe fn new_unchecked() -> Self {
         Self
     }
 }

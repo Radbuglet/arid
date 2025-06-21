@@ -14,6 +14,56 @@ use crate::{LateField, LateFieldDescriptor, LateLayoutInitToken, LateStruct};
 
 // === Exterior Mutability === //
 
+/// An instance of a [`LateStruct`].
+///
+/// You can define a late-initialized structure with the [`late_struct!`](crate::late_struct) macro
+/// and add fields to it with the [`late_field!`](crate::late_field) macro. You can then fetch these
+/// fields using the [`get`](LateInstance::get) and [`get_mut`](LateInstance::get_mut) methods.
+///
+/// These methods only allow users to borrow one field mutably at a time. If this is too
+/// restrictive, you can use the [`get_two`](LateInstance::get_two) method, which obtains two fields
+/// mutably at the same time. If that is still too restrictive, consider using the
+/// [`dynamic`](LateInstance::dynamic) method, which returns a [`LateInstanceDyn`] view of this
+/// structure providing a [`RefCell`]-like runtime-borrow-checked API for accessing fields. If that
+/// is still too restrictive, all fields in the structure exhibit
+/// [`UnsafeCell`](std::cell::UnsafeCell)-like semantics and thus can be borrowed manually using the
+/// [`get_ptr`](LateInstance::get_ptr) method.
+///
+/// ## Reflection Operations
+///
+/// Both [`LateInstance::fields`] and [`LateStruct::descriptor`] expose the set of fields in a given
+/// structure as a list of [`LateFieldDescriptor`]s. These can be used alongside the
+/// [`get_erased`](LateInstance::get_erased) and [`get_erased_mut`](LateInstance::get_erased_mut) to
+/// obtain references to the [`S::EraseTo`](LateStruct::EraseTo) types to which all fields are
+/// required to upcast.
+///
+/// ## Structural Traits
+///
+/// Trait implementations for this type are largely structural. If
+/// [`S::EraseTo`](LateStruct::EraseTo) implements [`Send`], for instance, this type will implement
+/// [`Send`]. Here is a full table of all of the structural trait implementations:
+///
+/// - `'static` and [`Default`], although since all fields are always required to implement these
+///   two traits, so too will [`LateInstance`].
+/// - [`Send`], [`Sync`], and [`Debug`] are all perfectly structural w.r.t `S::EraseTo`.
+/// - [`Eq`] is implemented if `S::EraseTo` implements [`DynEq`](super::DynEq).
+/// - [`PartialEq`] is implemented if `S::EraseTo` implements [`DynPartialEq`](super::DynPartialEq).
+/// - [`Clone`] is implemented if `S::EraseTo` implements [`DynClone`](super::DynClone).
+/// - [`Hash`] is implemented if `S::EraseTo` implements [`DynHash`](super::DynHash).
+///
+/// The [`DynEq`](super::DynEq), [`DynClone`](super::DynClone), and [`DynHash`](super::DynHash)
+/// traits exist because [`Eq`], [`Clone`], and [`Hash`], are not [`dyn` compatible](dyn-compat) and
+/// thus cannot directly be used in the bounds of a `dyn Trait` object.
+///
+/// We do not have a structural implementation for [`Ord`] since the order of fields inside this
+/// structure is not defined.
+///
+/// By default, `S::EraseTo` is set to `dyn 'static + fmt::Debug`. This implies that the
+/// `LateInstance` instantiating that `S` will implement [`Debug`] but will not implement, e.g.,
+/// `Send` or `Sync`. See [this section](index.html#advanced-usage) of the crate level documentation
+/// for information on how to change these bounds.
+///
+/// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
 pub struct LateInstance<S: LateStruct> {
     _ty: PhantomData<fn(S) -> S>,
 
@@ -64,7 +114,80 @@ impl<S: LateStruct> Default for LateInstance<S> {
     }
 }
 
+/// Regular operations.
 impl<S: LateStruct> LateInstance<S> {
+    /// Instantiate a new structure where each field is initialized using its implementation of the
+    /// [`Default`] trait.
+    ///
+    /// This is equivalent to the `LateInstance`'s implementation of `Default`.
+    pub fn new() -> Self {
+        unsafe {
+            Self::new_custom(|field, ptr| {
+                field.init(ptr);
+            })
+        }
+    }
+
+    /// Fetches an immutable reference to a field by its [`LateField`] marker type.
+    pub fn get<F: LateField<S>>(&self) -> &F::Value {
+        unsafe { self.get_ptr::<F>().as_ref() }
+    }
+
+    /// Fetches an mutable reference to a field by its [`LateField`] marker type.
+    ///
+    /// If you want to fetch more than one field at a time mutably, consider using the [`get_two`]
+    /// or [`dynamic`] methods.
+    ///
+    /// [`get_two`]: LateInstance::get_two
+    /// [`dynamic`]: LateInstance::dynamic
+    pub fn get_mut<F: LateField<S>>(&mut self) -> &mut F::Value {
+        unsafe { self.get_ptr::<F>().as_mut() }
+    }
+
+    /// Fetches a raw pointer to the structure's field by its [`LateField`] marker type. These
+    /// fields act as if they were wrapped inside an [`UnsafeCell`](std::cell::UnsafeCell) and thus
+    /// can be mutably dereferenced.
+    pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
+        unsafe {
+            self.data_base
+                .add(F::descriptor().offset(self.init_token))
+                .cast()
+        }
+    }
+
+    /// Fetches a pair of mutable references to distinct fields identified by their [`LateField`]
+    /// marker types. This method panics if `F` and `G` are the same type.
+    pub fn get_two<F, G>(&mut self) -> (&mut F::Value, &mut G::Value)
+    where
+        F: LateField<S>,
+        G: LateField<S>,
+    {
+        assert_ne!(TypeId::of::<F>(), TypeId::of::<G>());
+
+        unsafe { (self.get_ptr::<F>().as_mut(), self.get_ptr::<G>().as_mut()) }
+    }
+
+    /// Fetches a [`LateInstanceDyn`] view into the structure which exposes a [`RefCell`]-like API
+    /// for dynamically borrowing multiple fields mutably at the same time.
+    pub fn dynamic(&mut self) -> &mut LateInstanceDyn<S> {
+        unsafe { &mut *(self as *mut Self as *mut LateInstanceDyn<S>) }
+    }
+}
+
+/// Reflection operations.
+impl<S: LateStruct> LateInstance<S> {
+    pub unsafe fn new_custom(
+        mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8),
+    ) -> Self {
+        let Ok(res) = unsafe {
+            Self::try_new_custom(|field, ptr| {
+                init(field, ptr);
+                Result::<(), Infallible>::Ok(())
+            })
+        };
+        res
+    }
+
     pub unsafe fn try_new_custom<E>(
         mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8) -> Result<(), E>,
     ) -> Result<Self, E> {
@@ -90,7 +213,7 @@ impl<S: LateStruct> LateInstance<S> {
         });
 
         for &field in struct_fields {
-            init(&field, unsafe {
+            init(field, unsafe {
                 data_base.add(field.offset(init_token)).as_ptr()
             })?;
             *drop_guard += 1;
@@ -108,38 +231,44 @@ impl<S: LateStruct> LateInstance<S> {
         })
     }
 
-    pub unsafe fn new_custom(
-        mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8),
-    ) -> Self {
-        let Ok(res) = unsafe {
-            Self::try_new_custom(|field, ptr| {
-                init(field, ptr);
-                Result::<(), Infallible>::Ok(())
-            })
-        };
-        res
-    }
-
-    pub fn new() -> Self {
-        unsafe {
-            Self::new_custom(|field, ptr| {
-                field.init(ptr);
-            })
-        }
-    }
-
+    /// Fetches a [`LateLayoutInitToken`] attesting to the fact that all late-initialized structure
+    /// layouts and field offsets have been resolved.
     pub fn init_token(&self) -> LateLayoutInitToken {
         self.init_token
     }
 
+    /// Fetches the set of fields comprising the structure. This is equivalent to calling the
+    /// [`fields`](crate::LateStructDescriptor::fields) method on the
+    /// [`LateStructDescriptor`](crate::LateStructDescriptor) instance returned by
+    /// [`S::descriptor()`](LateStruct::descriptor).
     pub fn fields(&self) -> &'static [&'static LateFieldDescriptor<S>] {
         S::descriptor().fields(self.init_token)
     }
 
+    /// Fetches the pointer to the base of the heap allocation containing the structure's values.
     pub fn base_ptr(&self) -> NonNull<u8> {
         self.data_base
     }
 
+    /// Fetches an immutable reference to a field by its [`LateFieldDescriptor`] instance.
+    pub fn get_erased(&self, field: &LateFieldDescriptor<S>) -> &S::EraseTo {
+        unsafe { self.get_erased_ptr(field).as_ref() }
+    }
+
+    /// Fetches a mutable reference to a field by its [`LateFieldDescriptor`] instance.
+    ///
+    /// If you want to fetch more than one field at a time mutably, consider using the [`get_two`]
+    /// or [`dynamic`] methods.
+    ///
+    /// [`get_two`]: LateInstance::get_two
+    /// [`dynamic`]: LateInstance::dynamic
+    pub fn get_erased_mut(&mut self, field: &LateFieldDescriptor<S>) -> &mut S::EraseTo {
+        unsafe { self.get_erased_ptr(field).as_mut() }
+    }
+
+    /// Fetches a raw pointer to the structure's field identified by its [`LateFieldDescriptor`]
+    /// instance. These fields act as if they were wrapped inside an
+    /// [`UnsafeCell`](std::cell::UnsafeCell) and thus can be mutably dereferenced.
     pub fn get_erased_ptr(&self, field: &LateFieldDescriptor<S>) -> NonNull<S::EraseTo> {
         unsafe {
             NonNull::new_unchecked(
@@ -151,44 +280,6 @@ impl<S: LateStruct> LateInstance<S> {
                 ),
             )
         }
-    }
-
-    pub fn get_erased(&self, field: &LateFieldDescriptor<S>) -> &S::EraseTo {
-        unsafe { self.get_erased_ptr(field).as_ref() }
-    }
-
-    pub fn get_erased_mut(&mut self, field: &LateFieldDescriptor<S>) -> &mut S::EraseTo {
-        unsafe { self.get_erased_ptr(field).as_mut() }
-    }
-
-    pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
-        unsafe {
-            self.data_base
-                .add(F::descriptor().offset(self.init_token))
-                .cast()
-        }
-    }
-
-    pub fn get_two<F, G>(&mut self) -> (&mut F::Value, &mut G::Value)
-    where
-        F: LateField<S>,
-        G: LateField<S>,
-    {
-        assert_ne!(TypeId::of::<F>(), TypeId::of::<G>());
-
-        unsafe { (self.get_ptr::<F>().as_mut(), self.get_ptr::<G>().as_mut()) }
-    }
-
-    pub fn get<F: LateField<S>>(&self) -> &F::Value {
-        unsafe { self.get_ptr::<F>().as_ref() }
-    }
-
-    pub fn get_mut<F: LateField<S>>(&mut self) -> &mut F::Value {
-        unsafe { self.get_ptr::<F>().as_mut() }
-    }
-
-    pub fn dynamic(&mut self) -> &mut LateInstanceDyn<S> {
-        unsafe { &mut *(self as *mut Self as *mut LateInstanceDyn<S>) }
     }
 }
 
@@ -207,6 +298,8 @@ impl<S: LateStruct> Drop for LateInstance<S> {
 
 // === Interior Mutability === //
 
+/// A view around a [`LateInstance`] which exposes a [`RefCell`]-like API for dynamically borrowing
+/// multiple fields mutably at the same time.
 #[repr(transparent)]
 pub struct LateInstanceDyn<S: LateStruct> {
     _not_send_sync: PhantomData<*const ()>,
@@ -229,26 +322,32 @@ where
 }
 
 impl<S: LateStruct> LateInstanceDyn<S> {
+    /// Obtains a reference to the underlying [`LateInstance`].
     pub fn non_dynamic(&mut self) -> &mut LateInstance<S> {
         &mut self.inner
     }
 
+    /// Forwards to [`LateInstance::init_token`].
     pub fn init_token(&self) -> LateLayoutInitToken {
         self.inner.init_token
     }
 
+    /// Forwards to [`LateInstance::fields`].
     pub fn fields(&self) -> &'static [&'static LateFieldDescriptor<S>] {
         self.inner.fields()
     }
 
+    /// Forwards to [`LateInstance::get_ptr`].
     pub fn get_ptr<F: LateField<S>>(&self) -> NonNull<F::Value> {
         self.inner.get_ptr::<F>()
     }
 
+    /// Forwards to [`LateInstance::get_erased_ptr`].
     pub fn get_erased_ptr(&self, field: &LateFieldDescriptor<S>) -> NonNull<S::EraseTo> {
         self.inner.get_erased_ptr(field)
     }
 
+    /// Forwards to [`LateInstance::get_mut`].
     pub fn get_mut<F: LateField<S>>(&mut self) -> &mut F::Value {
         self.inner.get_mut::<F>()
     }
