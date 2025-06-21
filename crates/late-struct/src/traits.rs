@@ -194,14 +194,24 @@ pub mod late_macro_internals {
 }
 
 /// Implements the [`LateStruct`] trait for the specified `$ty` type, turing it into a marker type
-/// that can be used to refer to a late-initialized structure. The `$ty` type need only be [`Sized`]
-/// and live for `'static`.
+/// that can be used to refer to a late-initialized structure.
+///
+/// See the [crate level documentation](crate) for examples of this macro in action as well as a
+/// step-by-step guide on how to use it.
 ///
 /// You can attach fields onto this type using the [`late_field!`](crate::late_field) macro and can
 /// instantiate the structure defined by this macro using the [`LateInstance`](super::LateInstance)
 /// struct. Either operation can occur anywhere within the crate graph of a project; fields can be
 /// added to the structure in crates which are downstream to crates which instantiate that
 /// structure.
+///
+/// The `$ty` type need only be [`Sized`] and live for `'static`. No types in this macro invocation
+/// may involve unbound generic parameters.
+///
+/// You can specify more than one type onto which `LateStruct` should be implemented with this
+/// macro.
+///
+/// ## The `EraseTo` Parameter
 ///
 /// The optional `$erase_to` type specifies the type all field values should be able to upcast (i.e.
 /// "erase") to. Generally, this type is a [trait object]. For instance, if you specify `dyn Any +
@@ -218,11 +228,6 @@ pub mod late_macro_internals {
 /// restriction by using the [`DynEq`](super::DynEq), [`DynClone`](super::DynClone), and
 /// [`DynHash`](super::DynHash) traits respectively, which are `dyn` compatible while still encoding
 /// the necessary constraints.
-///
-/// You can specify more than one type onto which `LateStruct` should be implemented with this
-/// macro.
-///
-/// See the [crate level documentation](crate) for examples of this macro in action.
 ///
 /// [trait object]: https://doc.rust-lang.org/reference/types/trait-object.html#r-type.trait-object
 /// [dyn-compat]: https://doc.rust-lang.org/reference/items/traits.html#r-items.traits.dyn-compatible
@@ -267,7 +272,10 @@ macro_rules! late_struct {
 /// Implements the [`LateField`] trait for the specified `$ty` type, turning it into a marker type
 /// that can be used to refer to a field within a late-initialized structure.
 ///
-/// The `$ns type` specifies a [`LateStruct`] (defined by an earlier
+/// See the [crate level documentation](crate) for examples of this macro in action as well as a
+/// step-by-step guide on how to use it.
+///
+/// The `$ns` type specifies a [`LateStruct`] (defined by an earlier
 /// [`late_struct!`](crate::late_struct) invocation) into which this field will be placed. The
 /// optional `$val` type specifies the type of the value this field stores. If `$val` is omitted, it
 /// will default to `$ty`.
@@ -281,10 +289,8 @@ macro_rules! late_struct {
 ///
 /// If `$val` is distinct from `$ty`, the `$ty` type need only be [`Sized`] and live for `'static`.
 ///
-/// You can specify more than one type onto which `LateField` should be implemented with this
-/// macro.
-///
-/// See the [crate level documentation](crate) for examples of this macro in action.
+/// No types in this macro invocation may involve unbound generic parameters. You can specify more
+/// than one type onto which `LateField` should be implemented with this macro.
 #[macro_export]
 macro_rules! late_field {
     (
