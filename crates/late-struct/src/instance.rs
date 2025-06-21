@@ -176,6 +176,15 @@ impl<S: LateStruct> LateInstance<S> {
 
 /// Reflection operations.
 impl<S: LateStruct> LateInstance<S> {
+    /// Construct a new [`LateInstance`] using the `init` closure to initialize each field in the
+    /// order they appear in the
+    /// [`LateStructDescriptor::fields`](super::LateStructDescriptor::fields) list.
+    ///
+    /// ## Safety
+    ///
+    /// The pointee of each of the `*mut u8` pointers provided to `init` must be initialized to an
+    /// instance of the corresponding field's value type.
+    ///
     pub unsafe fn new_custom(
         mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8),
     ) -> Self {
@@ -188,6 +197,17 @@ impl<S: LateStruct> LateInstance<S> {
         res
     }
 
+    /// Construct a new [`LateInstance`] using the `init` closure to initialize each field in the
+    /// order they appear in the
+    /// [`LateStructDescriptor::fields`](super::LateStructDescriptor::fields) list. If `init`
+    /// returns an `Err`, the construction of the structure is aborted and the error is forwarded
+    /// to the caller.
+    ///
+    /// ## Safety
+    ///
+    /// The pointee of each of the `*mut u8` pointers provided to `init` must be initialized to an
+    /// instance of the corresponding field's value type.
+    ///
     pub unsafe fn try_new_custom<E>(
         mut init: impl FnMut(&'static LateFieldDescriptor<S>, *mut u8) -> Result<(), E>,
     ) -> Result<Self, E> {
@@ -352,6 +372,86 @@ impl<S: LateStruct> LateInstanceDyn<S> {
         self.inner.get_mut::<F>()
     }
 
+    /// Borrow the field identified by the supplied [`LateField`] marker type immutably, panicking
+    /// if the borrow failed.
+    ///
+    /// The smart-pointers returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
+        Ref::map(
+            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow(),
+            |()| unsafe { self.get_ptr::<F>().as_ref() },
+        )
+    }
+
+    /// Borrow the field identified by the supplied [`LateField`] marker type mutably, panicking
+    /// if the borrow failed.
+    ///
+    /// The smart-pointers returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn borrow_mut<F: LateField<S>>(&self) -> RefMut<'_, F::Value> {
+        RefMut::map(
+            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow_mut(),
+            |()| unsafe { self.get_ptr::<F>().as_mut() },
+        )
+    }
+
+    /// Borrow the field identified by the supplied [`LateField`] marker type immutably or return a
+    /// [`cell::BorrowError`] if the borrow failed.
+    ///
+    /// The smart-pointers and errors returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn try_borrow<F: LateField<S>>(&self) -> Result<Ref<'_, F::Value>, cell::BorrowError> {
+        self.inner.cells[F::descriptor().index(self.inner.init_token)]
+            .try_borrow()
+            .map(|field| Ref::map(field, |()| unsafe { self.get_ptr::<F>().as_ref() }))
+    }
+
+    /// Borrow the field identified by the supplied [`LateField`] marker type mutably or return a
+    /// [`cell::BorrowError`] if the borrow failed.
+    ///
+    /// The smart-pointers and errors returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn try_borrow_mut<F: LateField<S>>(
+        &self,
+    ) -> Result<RefMut<'_, F::Value>, cell::BorrowMutError> {
+        self.inner.cells[F::descriptor().index(self.inner.init_token)]
+            .try_borrow_mut()
+            .map(|field| RefMut::map(field, |()| unsafe { self.get_ptr::<F>().as_mut() }))
+    }
+
+    /// Borrow the field identified by the supplied [`LateFieldDescriptor`] immutably, panicking
+    /// if the borrow failed.
+    ///
+    /// The smart-pointers returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn borrow_erased<'a>(&'a self, field: &LateFieldDescriptor<S>) -> Ref<'a, S::EraseTo> {
+        Ref::map(
+            self.inner.cells[field.index(self.inner.init_token)].borrow(),
+            |()| unsafe { self.get_erased_ptr(field).as_ref() },
+        )
+    }
+
+    /// Borrow the field identified by the supplied [`LateFieldDescriptor`] mutably, panicking
+    /// if the borrow failed.
+    ///
+    /// The smart-pointers returned by this method are compatible with those returned by
+    /// [`RefCell`].
+    pub fn borrow_erased_mut<'a>(
+        &'a self,
+        field: &LateFieldDescriptor<S>,
+    ) -> RefMut<'a, S::EraseTo> {
+        RefMut::map(
+            self.inner.cells[field.index(self.inner.init_token)].borrow_mut(),
+            |()| unsafe { self.get_erased_ptr(field).as_mut() },
+        )
+    }
+
+    /// Borrow the field identified by the supplied [`LateFieldDescriptor`] immutably or return a
+    /// [`cell::BorrowError`] if the borrow failed.
+    ///
+    /// The smart-pointers and errors returned by this method are compatible with those returned by
+    /// [`RefCell`].
     pub fn try_borrow_erased<'a>(
         &'a self,
         field: &LateFieldDescriptor<S>,
@@ -365,6 +465,11 @@ impl<S: LateStruct> LateInstanceDyn<S> {
             })
     }
 
+    /// Borrow the field identified by the supplied [`LateFieldDescriptor`] mutably or return a
+    /// [`cell::BorrowMutError`] if the borrow failed.
+    ///
+    /// The smart-pointers and errors returned by this method are compatible with those returned by
+    /// [`RefCell`].
     pub fn try_borrow_erased_mut<'a>(
         &'a self,
         field: &LateFieldDescriptor<S>,
@@ -376,50 +481,5 @@ impl<S: LateStruct> LateInstanceDyn<S> {
                     self.get_erased_ptr(field).as_mut()
                 })
             })
-    }
-
-    pub fn borrow_erased<'a>(&'a self, field: &LateFieldDescriptor<S>) -> Ref<'a, S::EraseTo> {
-        Ref::map(
-            self.inner.cells[field.index(self.inner.init_token)].borrow(),
-            |()| unsafe { self.get_erased_ptr(field).as_ref() },
-        )
-    }
-
-    pub fn borrow_erased_mut<'a>(
-        &'a self,
-        field: &LateFieldDescriptor<S>,
-    ) -> RefMut<'a, S::EraseTo> {
-        RefMut::map(
-            self.inner.cells[field.index(self.inner.init_token)].borrow_mut(),
-            |()| unsafe { self.get_erased_ptr(field).as_mut() },
-        )
-    }
-
-    pub fn try_borrow<F: LateField<S>>(&self) -> Result<Ref<'_, F::Value>, cell::BorrowError> {
-        self.inner.cells[F::descriptor().index(self.inner.init_token)]
-            .try_borrow()
-            .map(|field| Ref::map(field, |()| unsafe { self.get_ptr::<F>().as_ref() }))
-    }
-
-    pub fn try_borrow_mut<F: LateField<S>>(
-        &self,
-    ) -> Result<RefMut<'_, F::Value>, cell::BorrowMutError> {
-        self.inner.cells[F::descriptor().index(self.inner.init_token)]
-            .try_borrow_mut()
-            .map(|field| RefMut::map(field, |()| unsafe { self.get_ptr::<F>().as_mut() }))
-    }
-
-    pub fn borrow<F: LateField<S>>(&self) -> Ref<'_, F::Value> {
-        Ref::map(
-            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow(),
-            |()| unsafe { self.get_ptr::<F>().as_ref() },
-        )
-    }
-
-    pub fn borrow_mut<F: LateField<S>>(&self) -> RefMut<'_, F::Value> {
-        RefMut::map(
-            self.inner.cells[F::descriptor().index(self.inner.init_token)].borrow_mut(),
-            |()| unsafe { self.get_ptr::<F>().as_mut() },
-        )
     }
 }

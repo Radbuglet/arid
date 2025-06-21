@@ -77,8 +77,10 @@ pub unsafe trait LateField<S: LateStruct>: Sized + 'static + LateFieldSealed<S> 
 mod sealed {
     use super::LateStruct;
 
+    #[doc(hidden)]
     pub trait LateStructSealed {}
 
+    #[doc(hidden)]
     pub trait LateFieldSealed<S: LateStruct> {}
 }
 
@@ -101,6 +103,18 @@ pub mod late_macro_internals {
     };
 
     pub type DefaultEraseTo = dyn 'static + fmt::Debug;
+
+    pub const fn new_late_struct_descriptor<S: LateStruct>() -> RawLateStructDescriptor {
+        RawLateStructDescriptor::new::<S>()
+    }
+
+    pub const fn new_late_field_descriptor<S, F>() -> RawLateFieldDescriptor
+    where
+        S: LateStruct,
+        F: LateField<S>,
+    {
+        RawLateFieldDescriptor::new::<S, F>()
+    }
 
     // === OrDefault === //
 
@@ -236,7 +250,7 @@ macro_rules! late_struct {
     ($($ty:ty $(=> $erase_to:ty)?),*$(,)?) => {$(
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateStructDescriptor =
-                $crate::late_macro_internals::RawLateStructDescriptor::new::<$ty>();
+                $crate::late_macro_internals::new_late_struct_descriptor::<$ty>();
 
             impl $crate::late_macro_internals::LateStructSealed for $ty {}
 
@@ -299,7 +313,7 @@ macro_rules! late_field {
     ) => {$(
         const _: () = {
             static DESCRIPTOR: $crate::late_macro_internals::RawLateFieldDescriptor =
-                $crate::late_macro_internals::RawLateFieldDescriptor::new::<$ns, $ty>();
+                $crate::late_macro_internals::new_late_field_descriptor::<$ns, $ty>();
 
             impl $crate::late_macro_internals::LateFieldSealed<$ns> for $ty {}
 

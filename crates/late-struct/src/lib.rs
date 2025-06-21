@@ -155,10 +155,12 @@
 //! struct MyStruct;
 //!
 //! late_struct!(MyStruct => dyn 'static + Reflect + Send + Sync);
+//! //                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//! //                    field value types must upcast to this type
 //! ```
 //!
-//! The only mandatory requirements of a field are that it have a [`Default`] initializer and live
-//! for `'static`.
+//! The only mandatory requirements of a field are that it have a [`Default`] initializer, be
+//! [`Sized`], and live for `'static`.
 //!
 //! We can access the erased forms of these fields using the [`LateInstance::fields`],
 //! [`LateInstance::get_erased`], and [`LateInstance::get_erased_mut`] methods like so...
@@ -264,6 +266,8 @@
 //! [`LateFieldDescriptor`] (which you can obtain from the [`LateStruct::descriptor`] and
 //! [`LateField::descriptor`] methods respectively) to learn about various options for reflecting
 //! upon the layout of a structure.
+
+#![forbid(missing_docs)]
 
 mod descriptor;
 pub use self::descriptor::*;
