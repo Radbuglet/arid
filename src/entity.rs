@@ -6,6 +6,7 @@ use late_struct::{LateField, late_field};
 use thunderdome::{Arena, Index};
 
 use crate::{
+    W,
     archetype::{ArchetypeId, ArchetypeStore, ComponentId},
     utils::{FxHashMap, FxHashSet},
     world::{World, WorldDebug},
@@ -74,6 +75,10 @@ pub unsafe trait Component:
     'static + Sized + fmt::Debug + LateField<World, Value = Storage<Self>>
 {
     type Handle: Handle<Component = Self>;
+
+    fn spawn(self, entity: Entity, w: W) -> Self::Handle {
+        entity.add(self, w)
+    }
 }
 
 pub unsafe trait Handle: Sized + 'static + fmt::Debug + Copy + Eq + Ord {
