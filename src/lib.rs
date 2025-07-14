@@ -1,1 +1,2 @@
+mod arena;
 mod utils;

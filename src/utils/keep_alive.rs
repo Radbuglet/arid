@@ -28,19 +28,19 @@ struct KeepAliveListInner<T: Copy> {
     bump: Bump,
 
     /// The first [`KeepAliveSlot`] in the list of potentially destroyed slots. These slots are only
-    /// actually considered destroyed if the reference count at the time of iteration is properly
+    /// actually considered destroyed if the reference count at the time of iteration is actually
     /// zero. This is because users can resurrect dead slots using the [`KeepAliveList::upgrade`]
     /// method.
     ///
-    /// This pointee is either `0x1` or a valid pointee guaranteed to be live for the duration of
-    /// this [`KeepAliveListInner`] instance.
+    /// This pointee is either [`KeepAliveList::SLOT_TERMINAL`] or a valid pointee guaranteed to be
+    /// live for the duration of this [`KeepAliveListInner`] instance.
     head: AtomicPtr<KeepAliveSlot<T>>,
 }
 
 struct KeepAliveSlot<T: Copy> {
     /// The raw pointer derived from [`KeepAliveList::inner`]'s `Arc`.
     ///
-    /// This counts towards the reference count while one or more `KeepAliveStrong` points to the
+    /// This counts towards the reference count when one or more `KeepAliveStrong`s point to the
     /// slot. In fact, it may count towards the reference count twice if [`KeepAliveStrong::drop`]
     /// and [`KeepAliveList::upgrade`] race. Otherwise, the pointer potentially dangles.
     owner: *const KeepAliveListInner<T>,
@@ -51,8 +51,12 @@ struct KeepAliveSlot<T: Copy> {
     /// The next potentially destroyed slot in the linked list. See [`KeepAliveListInner::head`] for
     /// details on how to interpret this list.
     ///
-    /// This pointer is `null` if the slot is not in the linked list, `0x1` if it's the last slot
-    /// in the list, and a pointer to a [`KeepAliveSlot`] living
+    /// This pointer is [`KeepAliveList::SLOT_NOT_IN_LIST`] if the slot is not in the linked list,
+    /// [`KeepAliveList::SLOT_TERMINAL`] if it's the last slot in the list, and a pointer to a
+    /// [`KeepAliveSlot`] if it's in the list but not terminal.
+    ///
+    /// This pointer is only ever mutated by [`KeepAliveStrong::drop`] and
+    /// [`KeepAliveList::take_condemned`].
     next: AtomicPtr<KeepAliveSlot<T>>,
 
     /// User-defined information about the slot.
@@ -74,20 +78,23 @@ impl<T: Copy> Default for KeepAliveList<T> {
         Self {
             inner: Arc::new(KeepAliveListInner {
                 bump: Bump::new(),
-                head: AtomicPtr::new(0x1 as *mut _),
+                head: AtomicPtr::new(Self::SLOT_TERMINAL as *mut _),
             }),
         }
     }
 }
 
 impl<T: Copy> KeepAliveList<T> {
+    const SLOT_NOT_IN_LIST: *mut KeepAliveSlot<T> = ptr::null_mut();
+    const SLOT_TERMINAL: *mut KeepAliveSlot<T> = 0x1 as *mut _;
+
     /// Create a new slot with the supplied `userdata` and return a unique [`KeepAliveStrong`]
     /// reference to it.
     pub fn spawn(&mut self, userdata: T) -> KeepAliveStrong<T> {
         let cell = self.inner.bump.alloc(KeepAliveSlot {
             owner: Arc::into_raw(self.inner.clone()),
             refs: AtomicUsize::new(1),
-            next: AtomicPtr::new(ptr::null_mut()),
+            next: AtomicPtr::new(Self::SLOT_NOT_IN_LIST),
             userdata,
         });
 
@@ -104,6 +111,7 @@ impl<T: Copy> KeepAliveList<T> {
     /// ## Safety
     ///
     /// `ptr` must be a slot owned by this [`KeepAliveList`].
+    ///
     pub unsafe fn upgrade(&self, ptr: KeepAlivePtr<T>) -> KeepAliveStrong<T> {
         let slot = unsafe { ptr.0.as_ref() };
 
@@ -120,31 +128,32 @@ impl<T: Copy> KeepAliveList<T> {
         loop {
             // Advance the head to the next element.
             let res = self.inner.head.fetch_update(Release, Acquire, |head| {
-                debug_assert!(!head.is_null());
+                debug_assert_ne!(head, Self::SLOT_NOT_IN_LIST);
 
-                if head as usize == 1 {
+                if head == Self::SLOT_TERMINAL {
                     // This is the terminator of the list.
                     return None;
                 }
 
+                // Safety: `head` is valid for the duration of its owner, which is `self`.
                 let slot = unsafe { &*head };
 
-                let next = slot.next.load(Relaxed);
-                slot.next.store(ptr::null_mut(), Relaxed);
-
-                Some(next)
+                Some(slot.next.load(Relaxed))
             });
 
             match res {
                 Ok(prev_head) => {
-                    let slot = KeepAlivePtr(unsafe { NonNull::new_unchecked(prev_head) });
+                    let slot_ptr = KeepAlivePtr(unsafe { NonNull::new_unchecked(prev_head) });
+                    let slot = unsafe { slot_ptr.0.as_ref() };
 
-                    if unsafe { slot.0.as_ref() }.refs.load(Relaxed) > 0 {
+                    slot.next.store(Self::SLOT_NOT_IN_LIST, Relaxed);
+
+                    if slot.refs.load(Relaxed) > 0 {
                         // This slot was a false positive.
                         continue;
                     }
 
-                    break Some((slot, unsafe { slot.userdata() }));
+                    break Some((slot_ptr, slot.userdata));
                 }
                 Err(_) => {
                     break None;
@@ -174,6 +183,7 @@ impl<T: Copy> KeepAlivePtr<T> {
     ///
     /// This pointee must be kept alive by either a [`KeepAliveStrong`] to the same slot or an
     /// owning [`KeepAliveList`].
+    ///
     pub unsafe fn userdata(&self) -> T {
         unsafe { self.0.as_ref() }.userdata
     }
@@ -229,7 +239,7 @@ impl<T: Copy> Drop for KeepAliveStrong<T> {
             let head = unsafe { &(*slot.owner).head };
 
             _ = head.fetch_update(Release, Acquire, |head| {
-                if !slot.next.load(Relaxed).is_null() {
+                if slot.next.load(Relaxed) != KeepAliveList::<T>::SLOT_NOT_IN_LIST {
                     // (already in list)
                     return None;
                 }
