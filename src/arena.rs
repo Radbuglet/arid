@@ -1,6 +1,7 @@
-use std::{mem::MaybeUninit, num::NonZeroU32};
+use std::{fmt, mem::MaybeUninit, num::NonZeroU32};
 
 use derive_where::derive_where;
+use late_struct::{LateInstance, LateStruct};
 use thin_vec::ThinVec;
 
 use crate::utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong};
@@ -13,6 +14,22 @@ pub trait Flush {
 
     fn flush_all(&mut self) {
         while self.flush() {}
+    }
+}
+
+impl<S> Flush for LateInstance<S>
+where
+    S: LateStruct,
+    S::EraseTo: Flush,
+{
+    fn flush(&mut self) -> bool {
+        let mut made_progress = false;
+
+        for field in self.fields() {
+            made_progress |= self.get_erased_mut(field).flush();
+        }
+
+        made_progress
     }
 }
 
@@ -29,6 +46,12 @@ struct ArenaHeader {
     free_slots: Vec<u32>,
     condemn_slots: Vec<KeepAlivePtr<u32>>,
     condemn_listener: KeepAliveList<u32>,
+}
+
+impl<T> fmt::Debug for Arena<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Arena").finish_non_exhaustive()
+    }
 }
 
 impl<T> Arena<T> {
@@ -155,7 +178,7 @@ impl<T> Drop for Slot<T> {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct KeepAlive(KeepAliveStrong<u32>);
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RawHandle {
     slot_idx: u32,
     generation: NonZeroU32,
