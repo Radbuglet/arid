@@ -86,9 +86,13 @@ mod rich_fmt {
             {
                 f.write_str(": ")?;
 
-                handle
-                    .get(unsafe { structure.cast::<LateInstance<T::Struct>>().as_ref() })
-                    .fmt(f)?;
+                if let Some(alive) =
+                    handle.try_get(unsafe { structure.cast::<LateInstance<T::Struct>>().as_ref() })
+                {
+                    alive.fmt(f)?;
+                } else {
+                    f.write_str("<dangling>")?;
+                }
             }
 
             Ok(())

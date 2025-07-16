@@ -1,10 +1,10 @@
-use boao::{Component, ErasedHandle, Handle, Strong, component, erase_strong};
+use boao::{Component, ErasedHandle, Flush, Handle, Strong, component, erase_strong};
 use late_struct::{LateInstance, late_struct};
 
 #[non_exhaustive]
 pub struct WorldNs;
 
-late_struct!(WorldNs);
+late_struct!(WorldNs => dyn Flush);
 
 pub type World = LateInstance<WorldNs>;
 
@@ -80,4 +80,11 @@ fn main() {
     let node = node.downcast::<MyNodeHandle>();
 
     dbg!(node.counter(w));
+
+    drop(node);
+
+    w.flush_all();
+
+    dbg!(node_ref.debug(w));
+    dbg!(other.debug(w));
 }
