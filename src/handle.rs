@@ -55,16 +55,16 @@ pub trait Handle:
         TransparentWrapper::wrap(raw)
     }
 
-    fn unwrap_raw(self) -> RawHandle {
+    fn raw_handle(self) -> RawHandle {
         TransparentWrapper::peel(self)
     }
 
     fn try_get(self, w: &LateInstance<Self::Struct>) -> Option<&Self::Component> {
-        w.get::<Self::Component>().get(self.unwrap_raw())
+        w.get::<Self::Component>().get(self.raw_handle())
     }
 
     fn try_get_mut(self, w: &mut LateInstance<Self::Struct>) -> Option<&mut Self::Component> {
-        w.get_mut::<Self::Component>().get_mut(self.unwrap_raw())
+        w.get_mut::<Self::Component>().get_mut(self.raw_handle())
     }
 
     #[track_caller]
@@ -100,7 +100,7 @@ pub trait Handle:
     #[track_caller]
     fn as_strong_if_alive(self, w: &LateInstance<Self::Struct>) -> Option<Strong<Self>> {
         w.get::<Self::Component>()
-            .upgrade(self.unwrap_raw())
+            .upgrade(self.raw_handle())
             .map(|keep_alive| Strong::new(self, keep_alive))
     }
 
