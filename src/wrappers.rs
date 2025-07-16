@@ -19,6 +19,12 @@ pub struct Strong<T: Handle> {
     keep_alive: KeepAlive,
 }
 
+impl<T: Handle> fmt::Debug for Strong<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.handle.fmt(f)
+    }
+}
+
 impl<T: Handle> Deref for Strong<T> {
     type Target = T;
 
@@ -50,6 +56,12 @@ impl<T: Handle> Strong<T> {
 #[derive_where(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MayDangle<T: Handle> {
     handle: T,
+}
+
+impl<T: Handle> fmt::Debug for MayDangle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.handle.fmt(f)
+    }
 }
 
 impl<T: Handle> From<T> for MayDangle<T> {
@@ -141,6 +153,12 @@ pub struct Erased<T: ?Sized + ErasedHandle> {
     unerase: fn(&RawHandle) -> &T,
 }
 
+impl<T: ?Sized + ErasedHandle> fmt::Debug for Erased<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.handle.fmt(f)
+    }
+}
+
 impl<T: ?Sized + ErasedHandle> Eq for Erased<T> {}
 
 impl<T: ?Sized + ErasedHandle> PartialEq for Erased<T> {
@@ -211,6 +229,12 @@ pub struct StrongErased<T: ?Sized + ErasedHandle> {
     handle: RawHandle,
     keep_alive: KeepAlive,
     unerase: fn(&RawHandle) -> &T,
+}
+
+impl<T: ?Sized + ErasedHandle> fmt::Debug for StrongErased<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.handle.fmt(f)
+    }
 }
 
 impl<T: ?Sized + ErasedHandle> Eq for StrongErased<T> {}

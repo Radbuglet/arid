@@ -15,6 +15,7 @@ pub type Wr<'a> = &'a World;
 pub struct MyNode {
     counter: u32,
     my_list: Vec<u32>,
+    chain: Option<MyNodeHandle>,
 }
 
 component!(WorldNs => MyNode);
@@ -24,6 +25,7 @@ impl MyNodeHandle {
         MyNode {
             counter: 1,
             my_list: Vec::new(),
+            chain: None,
         }
         .spawn(w)
     }
@@ -58,6 +60,11 @@ fn main() {
     let w = &mut w;
 
     let node = MyNodeHandle::new(w);
+
+    let other = MyNodeHandle::new(w);
+    other.m(w).chain = Some(*other);
+    node.m(w).chain = Some(*other);
+
     let node = erase_strong!(as dyn AbstractCounter, node);
 
     node.count(w);
@@ -66,6 +73,9 @@ fn main() {
     let node_ref = node.downcast_ref::<MyNodeHandle>();
 
     dbg!(node_ref.counter(w));
+    dbg!(node_ref);
+    dbg!(node_ref.debug(w));
+    dbg!(node_ref.debug(w));
 
     let node = node.downcast::<MyNodeHandle>();
 

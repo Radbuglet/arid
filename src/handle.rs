@@ -6,17 +6,107 @@ use late_struct::{LateField, LateInstance, LateStruct};
 
 use crate::{Arena, RawHandle, Strong};
 
-// === Debug === //
+// === DebugHandle === //
+
+mod rich_fmt {
+    use std::{
+        any::{TypeId, type_name},
+        cell::UnsafeCell,
+        fmt::{self, Debug},
+        ptr::NonNull,
+    };
+
+    use late_struct::{LateInstance, LateStruct};
+    use rustc_hash::{FxBuildHasher, FxHashSet};
+
+    use crate::RawHandle;
+
+    use super::Handle;
+
+    thread_local! {
+        static FMT_CONTEXT: UnsafeCell<Option<RichFmtCtx>> = const { UnsafeCell::new(None) };
+        static REENTRANT_DEBUGS: UnsafeCell<FxHashSet<(RawHandle, TypeId)>> =
+            const { UnsafeCell::new(FxHashSet::with_hasher(FxBuildHasher) )};
+    }
+
+    struct RichFmtCtx {
+        structure: NonNull<()>,
+        structure_ty: TypeId,
+    }
+
+    pub fn with_fmt_context<T, R>(structure: &LateInstance<T>, f: impl FnOnce() -> R) -> R
+    where
+        T: LateStruct,
+    {
+        let _guard = FMT_CONTEXT.with(|cx| {
+            let old_cx = unsafe { &mut *cx.get() }.replace(RichFmtCtx {
+                structure: NonNull::from(structure).cast(),
+                structure_ty: TypeId::of::<T>(),
+            });
+
+            scopeguard::guard(old_cx, |old_cx| {
+                FMT_CONTEXT.with(|cx| {
+                    unsafe { *cx.get() = old_cx };
+                });
+            })
+        });
+
+        f()
+    }
+
+    #[must_use]
+    fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
+        let was_inserted = REENTRANT_DEBUGS.with(|set| {
+            unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Component>()))
+        });
+
+        if !was_inserted {
+            return None;
+        }
+
+        Some(scopeguard::guard((), move |()| {
+            REENTRANT_DEBUGS.with(|set| {
+                unsafe { &mut *set.get() }
+                    .remove(&(handle.raw_handle(), TypeId::of::<T::Component>()))
+            });
+        }))
+    }
+
+    pub fn format_handle<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
+        FMT_CONTEXT.with(|cx| {
+            f.write_str(type_name::<T::Component>())?;
+            handle.raw_handle().fmt(f)?;
+
+            if let &Some(RichFmtCtx {
+                structure,
+                structure_ty,
+            }) = unsafe { &*cx.get() }
+                && structure_ty == TypeId::of::<T::Struct>()
+                && let Some(_reentrancy_guard) = reentrant_debug_guard(handle)
+            {
+                f.write_str(": ")?;
+
+                handle
+                    .get(unsafe { structure.cast::<LateInstance<T::Struct>>().as_ref() })
+                    .fmt(f)?;
+            }
+
+            Ok(())
+        })
+    }
+}
+
+pub use self::rich_fmt::*;
 
 #[derive_where(Copy, Clone)]
-pub struct Debug<'a, T: Handle> {
+pub struct DebugHandle<'a, T: Handle> {
     pub structure: &'a LateInstance<T::Struct>,
     pub handle: T,
 }
 
-impl<T: Handle> fmt::Debug for Debug<'_, T> {
+impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        with_fmt_context(self.structure, || self.handle.fmt(f))
     }
 }
 
@@ -113,8 +203,8 @@ pub trait Handle:
     }
 
     #[must_use]
-    fn debug<'a>(self, w: &'a LateInstance<Self::Struct>) -> Debug<'a, Self> {
-        Debug {
+    fn debug<'a>(self, w: &'a LateInstance<Self::Struct>) -> DebugHandle<'a, Self> {
+        DebugHandle {
             structure: w,
             handle: self,
         }
@@ -126,13 +216,14 @@ pub trait Handle:
 #[doc(hidden)]
 pub mod component_internals {
     pub use {
-        crate::{Arena, Component, Handle, RawHandle},
+        crate::{Arena, Component, Handle, RawHandle, format_handle},
         bytemuck::TransparentWrapper,
         late_struct::late_field,
         paste::paste,
         std::{
             clone::Clone,
             cmp::{Eq, Ord, PartialEq, PartialOrd},
+            fmt,
             hash::Hash,
             marker::Copy,
         },
@@ -147,7 +238,6 @@ macro_rules! component {
     ) => {$(
         $crate::component_internals::paste! {
             #[derive(
-                Debug,
                 $crate::component_internals::Copy,
                 $crate::component_internals::Clone,
                 $crate::component_internals::Hash,
@@ -159,6 +249,12 @@ macro_rules! component {
             )]
             #[repr(transparent)]
             pub struct [<$ty Handle>]($crate::component_internals::RawHandle);
+
+            impl $crate::component_internals::fmt::Debug for [<$ty Handle>] {
+                fn fmt(&self, f: &mut $crate::component_internals::fmt::Formatter<'_>) -> $crate::component_internals::fmt::Result {
+                    $crate::component_internals::format_handle(f, *self)
+                }
+            }
 
             $crate::component_internals::late_field!(
                 $ty[$namespace] => $crate::component_internals::Arena<$ty>

@@ -178,10 +178,16 @@ impl<T> Drop for Slot<T> {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct KeepAlive(KeepAliveStrong<u32>);
 
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RawHandle {
     slot_idx: u32,
     generation: NonZeroU32,
+}
+
+impl fmt::Debug for RawHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}, v{}]", self.slot_idx, self.generation.get())
+    }
 }
 
 impl RawHandle {
@@ -189,6 +195,14 @@ impl RawHandle {
         slot_idx: u32::MAX,
         generation: NonZeroU32::new(u32::MAX).unwrap(),
     };
+
+    pub const fn slot(self) -> u32 {
+        self.slot_idx
+    }
+
+    pub const fn generation(self) -> NonZeroU32 {
+        self.generation
+    }
 }
 
 // === Tests === //
