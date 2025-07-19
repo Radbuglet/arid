@@ -28,6 +28,8 @@ mod rich_fmt {
     #[must_use]
     fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
         let was_inserted = REENTRANT_DEBUGS.with(|set| {
+            // SAFETY: the `REENTRANT_DEBUGS` TLS item is only ever accessed in this module
+            // non-reentrantly.
             unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Component>()))
         });
 
@@ -37,6 +39,8 @@ mod rich_fmt {
 
         Some(scopeguard::guard((), move |()| {
             REENTRANT_DEBUGS.with(|set| {
+                // SAFETY: the `REENTRANT_DEBUGS` TLS item is only ever accessed in this module
+                // non-reentrantly.
                 unsafe { &mut *set.get() }
                     .remove(&(handle.raw_handle(), TypeId::of::<T::Component>()))
             });
@@ -107,6 +111,9 @@ impl<T: Component> ArenaTls<T> {
                 .inner
                 .borrow(w)
                 .get(handle)
+                // SAFETY: This reference is derived from a `Vec` which is only dropped if the
+                // `World` be acquired exclusively. This means that this borrow must end before the
+                // vector is dropped.
                 .map(|v| unsafe { &*(v as *const T) })
         })
     }
@@ -117,6 +124,9 @@ impl<T: Component> ArenaTls<T> {
                 .inner
                 .borrow_mut(w)
                 .get_mut(handle)
+                // SAFETY: This reference is derived from a `Vec` which is only dropped if the
+                // `World` be acquired exclusively. This means that this borrow must end before the
+                // vector is dropped.
                 .map(|v| unsafe { &mut *(v as *mut T) })
         })
     }
@@ -147,6 +157,7 @@ impl<T: Component> Drop for ArenaTlsPointee<T> {
             panic!("failed to acquire world token while dropping thread's TLS: {err:?}");
         }
 
+        // SAFETY: we can drop this value at most once in this destructor.
         unsafe { ManuallyDrop::drop(&mut self.inner) }
     }
 }

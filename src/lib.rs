@@ -1,3 +1,5 @@
+#![forbid(clippy::undocumented_unsafe_blocks)]
+
 mod arena;
 pub use arena::*;
 

@@ -52,6 +52,7 @@ impl World {
     }
 
     pub unsafe fn fake_token() -> &'static mut Self {
+        // SAFETY: provided by caller
         unsafe { NonNull::<World>::dangling().as_mut() }
     }
 
@@ -66,6 +67,10 @@ impl World {
     }
 
     pub fn fetch_tls<R>(f: impl FnOnce(Option<&Self>) -> R) -> R {
+        // SAFETY: `WORLD_IN_TLS` being `> 0` means that the token is actively being borrowed
+        // immutably by a `provide_tls` call earlier in the call stack. We know that the anonymous
+        // lifetime during which we borrow the world will force the fake token to expire before we
+        // relinquish this borrow so this is entirely sound.
         f((WORLD_IN_TLS.get() > 0).then(|| unsafe { &*World::fake_token() }))
     }
 }
@@ -123,12 +128,16 @@ impl<T: ?Sized> WorldCell<T> {
     pub fn borrow<'a>(&'a self, w: Wr<'a>) -> &'a T {
         _ = w;
 
+        // SAFETY: `WorldCell` is `!Sync` and there is only one possible `World` pointee per given
+        // thread so we inherit exterior mutability from that.
         unsafe { &*self.get_ptr() }
     }
 
     pub fn borrow_mut<'a>(&'a self, w: W<'a>) -> &'a mut T {
         _ = w;
 
+        // SAFETY: `WorldCell` is `!Sync` and there is only one possible `World` pointee per given
+        // thread so we inherit exterior mutability from that.
         unsafe { &mut *self.get_ptr() }
     }
 }

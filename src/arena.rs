@@ -1,8 +1,7 @@
 use std::{
-    cell::UnsafeCell,
     fmt, hash,
     marker::PhantomData,
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     num::NonZeroU32,
     rc::{Rc, Weak},
 };
@@ -11,14 +10,36 @@ use crate::W;
 
 // === KeepAlive === //
 
-thread_local! {
-    static DESTRUCTOR_QUEUE: UnsafeCell<Vec<DestructorTask>>
-        = const { UnsafeCell::new(Vec::new()) };
+mod dtor_queue {
+    use std::{cell::UnsafeCell, mem};
+
+    use super::DestructorTask;
+
+    thread_local! {
+        static DESTRUCTOR_QUEUE: UnsafeCell<Vec<DestructorTask>>
+            = const { UnsafeCell::new(Vec::new()) };
+    }
+
+    pub fn push_task(task: DestructorTask) {
+        DESTRUCTOR_QUEUE.with(|queue| {
+            // SAFETY: the `DESTRUCTOR_QUEUE` is only ever accessed in two places and both
+            // places are non-reentrant with respect to one another.
+            unsafe { &mut *queue.get() }.push(task);
+        })
+    }
+
+    pub fn take_tasks() -> Vec<DestructorTask> {
+        DESTRUCTOR_QUEUE.with(|queue| {
+            // SAFETY: the `DESTRUCTOR_QUEUE` is only ever accessed in two places and both
+            // places are non-reentrant with respect to one another.
+            mem::take(unsafe { &mut *queue.get() })
+        })
+    }
 }
 
 pub fn flush(w: W) {
     loop {
-        let tasks = DESTRUCTOR_QUEUE.with(|queue| mem::take(unsafe { &mut *queue.get() }));
+        let tasks = dtor_queue::take_tasks();
 
         if tasks.is_empty() {
             break;
@@ -55,7 +76,7 @@ struct KeepAlivePointee {
 
 impl Drop for KeepAlivePointee {
     fn drop(&mut self) {
-        DESTRUCTOR_QUEUE.with(|queue| unsafe { &mut *queue.get() }.push(self.task));
+        dtor_queue::push_task(self.task);
     }
 }
 
@@ -102,6 +123,8 @@ impl<T> Arena<T> {
 
             RawHandle {
                 slot_idx,
+                // SAFETY: we ensure that our generation will never reach above `u32::MAX - 1` in
+                // our `try_commit_removal` method.
                 generation: unsafe { NonZeroU32::new_unchecked(slot.generation) },
             }
         } else {
@@ -145,6 +168,8 @@ impl<T> Arena<T> {
         // Take slot contents and mark it as invalid.
         slot.generation += 1;
 
+        // SAFETY: we incremented our generation from odd to even, meaning that the slot went from
+        // logically initialized to uninitialized.
         let value = unsafe { slot.value.assume_init_read() };
 
         // Ensure that the generation never reaches a point where it could never be safely
@@ -181,6 +206,7 @@ impl<T> Arena<T> {
         self.slots
             .get(handle.slot_idx as usize)
             .filter(|v| v.generation == handle.generation.get())
+            // SAFETY: handle generations are odd, meaning that this value is initialized.
             .map(|v| unsafe { v.value.assume_init_ref() })
     }
 
@@ -188,6 +214,7 @@ impl<T> Arena<T> {
         self.slots
             .get_mut(handle.slot_idx as usize)
             .filter(|v| v.generation == handle.generation.get())
+            // SAFETY: handle generations are odd, meaning that this value is initialized.
             .map(|v| unsafe { v.value.assume_init_mut() })
     }
 }
@@ -203,6 +230,7 @@ impl<T> Drop for Slot<T> {
             return;
         }
 
+        // SAFETY: by invariant, odd generations mean that this value is occupied.
         unsafe { self.value.assume_init_drop() };
     }
 }

@@ -100,11 +100,7 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// ## Safety
-///
-/// This trait can only be implemented for [`Handle`]s.
-///
-pub unsafe trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
+pub trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
     fn is_alive(&self, w: Wr) -> bool;
 
     fn pointee_type(&self) -> TypeId;
@@ -118,7 +114,7 @@ pub unsafe trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Seal
 
 impl<T: Handle> sealed::Sealed for T {}
 
-unsafe impl<T: Handle> ErasedHandle for T {
+impl<T: Handle> ErasedHandle for T {
     fn is_alive(&self, w: Wr) -> bool {
         (*self).is_alive(w)
     }
@@ -166,6 +162,7 @@ impl<T: ?Sized + ErasedHandle> PartialEq for Erased<T> {
 
 impl<T: ?Sized + ErasedHandle> Erased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: V) -> Self {
+        // SAFETY: `Handle`s are `repr(transparent)` w.r.t.
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         Self {
@@ -244,6 +241,7 @@ impl<T: ?Sized + ErasedHandle> PartialEq for StrongErased<T> {
 
 impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
+        // SAFETY: `V: Handle` is `repr(transparent)` w.r.t. `RawHandle` so this is a safe type-pun.
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         let raw_handle = handle.raw_handle();
