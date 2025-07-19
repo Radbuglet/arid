@@ -16,7 +16,7 @@ use crate::{Handle, KeepAlive, RawHandle};
 pub struct Strong<T: Handle> {
     handle: T,
     #[derive_where(skip)]
-    keep_alive: KeepAlive,
+    keep_alive: KeepAlive<LateInstance<T::Struct>>,
 }
 
 impl<T: Handle> fmt::Debug for Strong<T> {
@@ -34,15 +34,15 @@ impl<T: Handle> Deref for Strong<T> {
 }
 
 impl<T: Handle> Strong<T> {
-    pub fn new(handle: T, keep_alive: KeepAlive) -> Self {
+    pub fn new(handle: T, keep_alive: KeepAlive<LateInstance<T::Struct>>) -> Self {
         Self { handle, keep_alive }
     }
 
-    pub fn into_keep_alive(me: Self) -> KeepAlive {
+    pub fn into_keep_alive(me: Self) -> KeepAlive<LateInstance<T::Struct>> {
         me.keep_alive
     }
 
-    pub fn keep_alive(me: &Self) -> &KeepAlive {
+    pub fn keep_alive(me: &Self) -> &KeepAlive<LateInstance<T::Struct>> {
         &me.keep_alive
     }
 
@@ -227,7 +227,7 @@ macro_rules! erase {
 #[derive_where(Clone)]
 pub struct StrongErased<T: ?Sized + ErasedHandle> {
     handle: RawHandle,
-    keep_alive: KeepAlive,
+    keep_alive: KeepAlive<LateInstance<T::Struct>>,
     unerase: fn(&RawHandle) -> &T,
 }
 
@@ -248,7 +248,10 @@ impl<T: ?Sized + ErasedHandle> PartialEq for StrongErased<T> {
 }
 
 impl<T: ?Sized + ErasedHandle> StrongErased<T> {
-    pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
+    pub fn new<V>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self
+    where
+        V: Handle<Struct = T::Struct>,
+    {
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         let raw_handle = handle.raw_handle();
@@ -265,7 +268,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         self.handle
     }
 
-    pub fn keep_alive(&self) -> &KeepAlive {
+    pub fn keep_alive(&self) -> &KeepAlive<LateInstance<T::Struct>> {
         &self.keep_alive
     }
 
@@ -276,7 +279,10 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         }
     }
 
-    pub fn try_downcast<V: Handle>(self) -> Result<Strong<V>, Self> {
+    pub fn try_downcast<V>(self) -> Result<Strong<V>, Self>
+    where
+        V: Handle<Struct = T::Struct>,
+    {
         if self.pointee_type() == TypeId::of::<V::Component>() {
             Ok(Strong {
                 handle: V::wrap_raw(self.raw_handle()),
@@ -292,7 +298,10 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     }
 
     #[track_caller]
-    pub fn downcast<V: Handle>(self) -> Strong<V> {
+    pub fn downcast<V>(self) -> Strong<V>
+    where
+        V: Handle<Struct = T::Struct>,
+    {
         match self.try_downcast::<V>() {
             Ok(v) => v,
             Err(me) => panic!(

@@ -1,10 +1,15 @@
-use boao::{Component, ErasedHandle, Flush, Handle, Strong, component, erase_strong};
-use late_struct::{LateInstance, late_struct};
+use boao::{
+    ArenaManager, Component, ErasedHandle, Handle, Meta, Strong, WorldFlushExt as _, component,
+    erase_strong,
+};
+use late_struct::{LateInstance, late_field, late_struct};
 
 #[non_exhaustive]
 pub struct WorldNs;
 
-late_struct!(WorldNs => dyn Flush);
+late_struct!(WorldNs);
+
+late_field!(ArenaManager<LateInstance<WorldNs>>[WorldNs]);
 
 pub type World = LateInstance<WorldNs>;
 
@@ -18,7 +23,15 @@ pub struct MyNode {
     chain: Option<MyNodeHandle>,
 }
 
-component!(WorldNs => MyNode);
+component!(MyNode[u32] in WorldNs);
+
+impl Meta<MyNodeHandle> for u32 {
+    type ArenaAnnotation = ();
+
+    fn destroy(handle: MyNodeHandle, w: &mut LateInstance<<MyNodeHandle as Handle>::Struct>) {
+        w.get_mut::<MyNode>().arena.remove_now(handle.raw_handle());
+    }
+}
 
 impl MyNodeHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -65,6 +78,10 @@ fn main() {
     other.m(w).chain = Some(*other);
     node.m(w).chain = Some(*other);
 
+    *other.meta_mut(w) += 1;
+    dbg!(node.meta(w));
+    dbg!(other.meta(w));
+
     let node = erase_strong!(as dyn AbstractCounter, node);
 
     node.count(w);
@@ -83,7 +100,7 @@ fn main() {
 
     drop(node);
 
-    w.flush_all();
+    w.flush();
 
     dbg!(node_ref.debug(w));
     dbg!(other.debug(w));

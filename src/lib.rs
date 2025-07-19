@@ -1,4 +1,4 @@
-extern crate late_struct;
+pub extern crate late_struct;
 
 mod arena;
 pub use self::arena::*;
