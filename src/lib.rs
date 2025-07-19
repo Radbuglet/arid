@@ -1,12 +1,11 @@
-pub extern crate late_struct;
-
 mod arena;
-pub use self::arena::*;
+pub use arena::*;
 
 mod handle;
-pub use self::handle::*;
+pub use handle::*;
+
+mod world;
+pub use world::*;
 
 mod wrappers;
-pub use self::wrappers::*;
-
-mod utils;
+pub use wrappers::*;

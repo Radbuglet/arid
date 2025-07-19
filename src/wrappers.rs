@@ -6,9 +6,8 @@ use std::{
 };
 
 use derive_where::derive_where;
-use late_struct::{LateInstance, LateStruct};
 
-use crate::{Handle, KeepAlive, RawHandle};
+use crate::{Handle, KeepAlive, RawHandle, Wr};
 
 // === Strong === //
 
@@ -16,7 +15,7 @@ use crate::{Handle, KeepAlive, RawHandle};
 pub struct Strong<T: Handle> {
     handle: T,
     #[derive_where(skip)]
-    keep_alive: KeepAlive<LateInstance<T::Struct>>,
+    keep_alive: KeepAlive,
 }
 
 impl<T: Handle> fmt::Debug for Strong<T> {
@@ -34,15 +33,15 @@ impl<T: Handle> Deref for Strong<T> {
 }
 
 impl<T: Handle> Strong<T> {
-    pub fn new(handle: T, keep_alive: KeepAlive<LateInstance<T::Struct>>) -> Self {
+    pub fn new(handle: T, keep_alive: KeepAlive) -> Self {
         Self { handle, keep_alive }
     }
 
-    pub fn into_keep_alive(me: Self) -> KeepAlive<LateInstance<T::Struct>> {
+    pub fn into_keep_alive(me: Self) -> KeepAlive {
         me.keep_alive
     }
 
-    pub fn keep_alive(me: &Self) -> &KeepAlive<LateInstance<T::Struct>> {
+    pub fn keep_alive(me: &Self) -> &KeepAlive {
         &me.keep_alive
     }
 
@@ -75,12 +74,12 @@ impl<T: Handle> MayDangle<T> {
         Self { handle }
     }
 
-    pub fn get(self, w: &LateInstance<T::Struct>) -> Option<T> {
+    pub fn get(self, w: Wr) -> Option<T> {
         self.handle.is_alive(w).then_some(self.handle)
     }
 
     #[track_caller]
-    pub fn unwrap(self, w: &LateInstance<T::Struct>) -> T {
+    pub fn unwrap(self, w: Wr) -> T {
         assert!(
             self.handle.is_alive(w),
             "attempted to unwrap dangling handle {:?}",
@@ -106,9 +105,7 @@ mod sealed {
 /// This trait can only be implemented for [`Handle`]s.
 ///
 pub unsafe trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
-    type Struct: LateStruct;
-
-    fn is_alive(&self, w: &LateInstance<Self::Struct>) -> bool;
+    fn is_alive(&self, w: Wr) -> bool;
 
     fn pointee_type(&self) -> TypeId;
 
@@ -122,9 +119,7 @@ pub unsafe trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Seal
 impl<T: Handle> sealed::Sealed for T {}
 
 unsafe impl<T: Handle> ErasedHandle for T {
-    type Struct = T::Struct;
-
-    fn is_alive(&self, w: &LateInstance<Self::Struct>) -> bool {
+    fn is_alive(&self, w: Wr) -> bool {
         (*self).is_alive(w)
     }
 
@@ -227,7 +222,7 @@ macro_rules! erase {
 #[derive_where(Clone)]
 pub struct StrongErased<T: ?Sized + ErasedHandle> {
     handle: RawHandle,
-    keep_alive: KeepAlive<LateInstance<T::Struct>>,
+    keep_alive: KeepAlive,
     unerase: fn(&RawHandle) -> &T,
 }
 
@@ -248,10 +243,7 @@ impl<T: ?Sized + ErasedHandle> PartialEq for StrongErased<T> {
 }
 
 impl<T: ?Sized + ErasedHandle> StrongErased<T> {
-    pub fn new<V>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self
-    where
-        V: Handle<Struct = T::Struct>,
-    {
+    pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         let raw_handle = handle.raw_handle();
@@ -268,7 +260,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         self.handle
     }
 
-    pub fn keep_alive(&self) -> &KeepAlive<LateInstance<T::Struct>> {
+    pub fn keep_alive(&self) -> &KeepAlive {
         &self.keep_alive
     }
 
@@ -279,10 +271,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         }
     }
 
-    pub fn try_downcast<V>(self) -> Result<Strong<V>, Self>
-    where
-        V: Handle<Struct = T::Struct>,
-    {
+    pub fn try_downcast<V: Handle>(self) -> Result<Strong<V>, Self> {
         if self.pointee_type() == TypeId::of::<V::Component>() {
             Ok(Strong {
                 handle: V::wrap_raw(self.raw_handle()),
@@ -298,10 +287,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     }
 
     #[track_caller]
-    pub fn downcast<V>(self) -> Strong<V>
-    where
-        V: Handle<Struct = T::Struct>,
-    {
+    pub fn downcast<V: Handle>(self) -> Strong<V> {
         match self.try_downcast::<V>() {
             Ok(v) => v,
             Err(me) => panic!(
