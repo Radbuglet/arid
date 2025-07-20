@@ -1,187 +1,157 @@
 use std::{
-    fmt, hash,
-    marker::PhantomData,
+    fmt,
     mem::MaybeUninit,
-    num::NonZeroU32,
-    rc::{Rc, Weak},
+    num::{NonZeroU32, NonZeroU64},
+    sync::atomic::{AtomicU64, Ordering::*},
 };
 
-use crate::W;
+use derive_where::derive_where;
+use thin_vec::ThinVec;
 
-// === KeepAlive === //
-
-mod dtor_queue {
-    use std::{cell::UnsafeCell, mem};
-
-    use super::DestructorTask;
-
-    thread_local! {
-        static DESTRUCTOR_QUEUE: UnsafeCell<Vec<DestructorTask>>
-            = const { UnsafeCell::new(Vec::new()) };
-    }
-
-    pub fn push_task(task: DestructorTask) {
-        DESTRUCTOR_QUEUE.with(|queue| {
-            // SAFETY: the `DESTRUCTOR_QUEUE` is only ever accessed in two places and both
-            // places are non-reentrant with respect to one another.
-            unsafe { &mut *queue.get() }.push(task);
-        })
-    }
-
-    pub fn take_tasks() -> Vec<DestructorTask> {
-        DESTRUCTOR_QUEUE.with(|queue| {
-            // SAFETY: the `DESTRUCTOR_QUEUE` is only ever accessed in two places and both
-            // places are non-reentrant with respect to one another.
-            mem::take(unsafe { &mut *queue.get() })
-        })
-    }
-}
-
-pub fn flush(w: W) {
-    loop {
-        let tasks = dtor_queue::take_tasks();
-
-        if tasks.is_empty() {
-            break;
-        }
-
-        for task in tasks {
-            (task.destructor)(task.handle, w);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct KeepAlive(Rc<KeepAlivePointee>);
-
-impl Eq for KeepAlive {}
-
-impl PartialEq for KeepAlive {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl hash::Hash for KeepAlive {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.0).hash(state);
-    }
-}
-
-#[derive(Debug)]
-struct KeepAlivePointee {
-    _not_send_sync: PhantomData<*const ()>,
-    task: DestructorTask,
-}
-
-impl Drop for KeepAlivePointee {
-    fn drop(&mut self) {
-        dtor_queue::push_task(self.task);
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-struct DestructorTask {
-    handle: RawHandle,
-    destructor: fn(RawHandle, W),
-}
-
-fn make_keep_alive(handle: RawHandle, destructor: fn(RawHandle, W)) -> Rc<KeepAlivePointee> {
-    Rc::new(KeepAlivePointee {
-        _not_send_sync: PhantomData,
-        task: DestructorTask { handle, destructor },
-    })
-}
+use crate::utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong};
 
 // === Arena === //
 
-pub struct Arena<T> {
-    free_slots: Vec<u32>,
-    keep_alive_slots: Vec<Weak<KeepAlivePointee>>,
-    // FIXME: We may need a non-`Unique`-guarded vector.
-    slots: Vec<Slot<T>>,
-    destructor: fn(RawHandle, W),
+#[derive_where(Debug)]
+pub struct ArenaManager<S: ?Sized> {
+    uid: NonZeroU64,
+    listener: KeepAliveList<KeepAliveSlot<S>>,
 }
 
-impl<T> Arena<T> {
-    pub const fn new(destructor: fn(RawHandle, W)) -> Self {
+impl<S: ?Sized> Default for ArenaManager<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: ?Sized> ArenaManager<S> {
+    pub fn new() -> Self {
+        static UID_GEN: AtomicU64 = AtomicU64::new(1);
+
         Self {
-            free_slots: Vec::new(),
-            keep_alive_slots: Vec::new(),
-            slots: Vec::new(),
-            destructor,
+            uid: NonZeroU64::new(UID_GEN.fetch_add(1, Relaxed)).unwrap(),
+            listener: KeepAliveList::default(),
         }
     }
 
-    pub fn insert(&mut self, value: T) -> (RawHandle, KeepAlive) {
-        // Allocate a handle
-        let handle = if let Some(slot_idx) = self.free_slots.pop() {
+    #[must_use]
+    pub fn take_condemned(&mut self) -> Option<KeepAliveSlot<S>> {
+        self.listener.take_condemned().map(|v| v.1)
+    }
+}
+
+#[derive_where(Debug, Copy, Clone)]
+pub struct KeepAliveSlot<S: ?Sized> {
+    pub handle: RawHandle,
+    pub destructor: fn(RawHandle, &mut S),
+}
+
+impl<S: ?Sized> KeepAliveSlot<S> {
+    pub fn process(self, cx: &mut S) {
+        (self.destructor)(self.handle, cx)
+    }
+}
+
+#[derive_where(Default)]
+pub struct Arena<T, S: ?Sized> {
+    header: Box<ArenaHeader<S>>,
+    slots: ThinVec<Slot<T>>,
+}
+
+#[derive_where(Default)]
+struct ArenaHeader<S: ?Sized> {
+    manager_uid: Option<NonZeroU64>,
+    keep_alive_slots: Vec<KeepAlivePtr<KeepAliveSlot<S>>>,
+    free_slots: Vec<u32>,
+}
+
+impl<T, S: ?Sized> fmt::Debug for Arena<T, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Arena").finish_non_exhaustive()
+    }
+}
+
+impl<T, S: ?Sized> Arena<T, S> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(
+        &mut self,
+        manager: &mut ArenaManager<S>,
+        destructor: fn(RawHandle, &mut S),
+        value: T,
+    ) -> (KeepAlive<S>, RawHandle) {
+        // Ensure that we're always allocating keep-alive slots from the same manager.
+        if let Some(manager_uid) = self.header.manager_uid {
+            assert_eq!(manager.uid, manager_uid);
+        } else {
+            self.header.manager_uid = Some(manager.uid);
+        }
+
+        // Attempt to reuse an existing empty slot.
+        if let Some(slot_idx) = self.header.free_slots.pop() {
             let slot = &mut self.slots[slot_idx as usize];
 
             slot.generation += 1;
+
+            let keep_alive = self.header.keep_alive_slots[slot_idx as usize];
+            let keep_alive = KeepAlive(unsafe { manager.listener.upgrade(keep_alive) });
+
             slot.value.write(value);
 
-            RawHandle {
+            let handle = RawHandle {
                 slot_idx,
-                // SAFETY: we ensure that our generation will never reach above `u32::MAX - 1` in
-                // our `try_commit_removal` method.
                 generation: unsafe { NonZeroU32::new_unchecked(slot.generation) },
-            }
-        } else {
-            // Otherwise, create a new slot.
-            let slot_idx = u32::try_from(self.slots.len()).expect("too many slots");
+            };
 
-            self.keep_alive_slots.push(Weak::default());
-            self.slots.push(Slot {
-                generation: 1,
-                value: MaybeUninit::new(value),
-            });
-
-            RawHandle {
-                slot_idx,
-                generation: NonZeroU32::new(1).unwrap(),
-            }
-        };
-
-        // Insert a keep-alive.
-        let keep_alive = make_keep_alive(handle, self.destructor);
-
-        self.keep_alive_slots[handle.slot_idx as usize] = Rc::downgrade(&keep_alive);
-
-        (handle, KeepAlive(keep_alive))
-    }
-
-    pub fn try_commit_removal(&mut self, handle: RawHandle) -> Option<T> {
-        let slot = &mut self.slots[handle.slot_idx as usize];
-
-        // Is the handle valid?
-        if slot.generation != handle.generation.get() {
-            return None;
+            return (keep_alive, handle);
         }
 
-        // Is it being kept alive?
-        if self.keep_alive_slots[handle.slot_idx as usize].strong_count() > 0 {
-            // (looks like a resurrection?)
+        // Otherwise, create a new slot.
+        let slot_idx = u32::try_from(self.slots.len()).expect("too many slots");
+
+        self.slots.push(Slot {
+            generation: 1,
+            value: MaybeUninit::new(value),
+        });
+
+        let handle = RawHandle {
+            slot_idx,
+            generation: NonZeroU32::new(1).unwrap(),
+        };
+
+        let keep_alive = KeepAlive(manager.listener.spawn(KeepAliveSlot { handle, destructor }));
+
+        self.header.keep_alive_slots.push(keep_alive.0.ptr());
+
+        (keep_alive, handle)
+    }
+
+    pub fn remove_now(&mut self, handle: RawHandle) -> Option<T> {
+        let slot = &mut self.slots[handle.slot_idx as usize];
+
+        if slot.generation != handle.generation.get() {
             return None;
         }
 
         // Take slot contents and mark it as invalid.
         slot.generation += 1;
 
-        // SAFETY: we incremented our generation from odd to even, meaning that the slot went from
-        // logically initialized to uninitialized.
         let value = unsafe { slot.value.assume_init_read() };
 
         // Ensure that the generation never reaches a point where it could never be safely
         // invalidated.
         if slot.generation != u32::MAX - 1 {
-            self.free_slots.push(handle.slot_idx);
+            self.header.free_slots.push(handle.slot_idx);
         }
 
         Some(value)
     }
 
-    pub fn upgrade(&mut self, handle: RawHandle) -> Option<KeepAlive> {
+    pub fn upgrade(&self, manager: &ArenaManager<S>, handle: RawHandle) -> Option<KeepAlive<S>> {
+        assert_eq!(Some(manager.uid), self.header.manager_uid);
+
         // Ensure the handle is live.
         if self
             .slots
@@ -192,21 +162,15 @@ impl<T> Arena<T> {
         }
 
         // Upgrade the handle.
-        let keep_alive_slot = &mut self.keep_alive_slots[handle.slot_idx as usize];
-        let keep_alive = keep_alive_slot.upgrade().unwrap_or_else(|| {
-            let keep_alive = make_keep_alive(handle, self.destructor);
-            *keep_alive_slot = Rc::downgrade(&keep_alive);
-            keep_alive
-        });
+        let ptr = self.header.keep_alive_slots[handle.slot_idx as usize];
 
-        Some(KeepAlive(keep_alive))
+        Some(KeepAlive(unsafe { manager.listener.upgrade(ptr) }))
     }
 
     pub fn get(&self, handle: RawHandle) -> Option<&T> {
         self.slots
             .get(handle.slot_idx as usize)
             .filter(|v| v.generation == handle.generation.get())
-            // SAFETY: handle generations are odd, meaning that this value is initialized.
             .map(|v| unsafe { v.value.assume_init_ref() })
     }
 
@@ -214,7 +178,6 @@ impl<T> Arena<T> {
         self.slots
             .get_mut(handle.slot_idx as usize)
             .filter(|v| v.generation == handle.generation.get())
-            // SAFETY: handle generations are odd, meaning that this value is initialized.
             .map(|v| unsafe { v.value.assume_init_mut() })
     }
 }
@@ -230,12 +193,14 @@ impl<T> Drop for Slot<T> {
             return;
         }
 
-        // SAFETY: by invariant, odd generations mean that this value is occupied.
-        unsafe { self.value.assume_init_drop() };
+        unsafe { MaybeUninit::assume_init_drop(&mut self.value) };
     }
 }
 
-// === RawHandle === //
+// === Handles === //
+
+#[derive_where(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct KeepAlive<S: ?Sized>(KeepAliveStrong<KeepAliveSlot<S>>);
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RawHandle {

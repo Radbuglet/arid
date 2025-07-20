@@ -7,7 +7,7 @@ use std::{
 
 use derive_where::derive_where;
 
-use crate::{Handle, KeepAlive, RawHandle, Wr};
+use crate::{Handle, KeepAlive, RawHandle, World, Wr};
 
 // === Strong === //
 
@@ -15,7 +15,7 @@ use crate::{Handle, KeepAlive, RawHandle, Wr};
 pub struct Strong<T: Handle> {
     handle: T,
     #[derive_where(skip)]
-    keep_alive: KeepAlive,
+    keep_alive: KeepAlive<World>,
 }
 
 impl<T: Handle> fmt::Debug for Strong<T> {
@@ -33,15 +33,15 @@ impl<T: Handle> Deref for Strong<T> {
 }
 
 impl<T: Handle> Strong<T> {
-    pub fn new(handle: T, keep_alive: KeepAlive) -> Self {
+    pub fn new(handle: T, keep_alive: KeepAlive<World>) -> Self {
         Self { handle, keep_alive }
     }
 
-    pub fn into_keep_alive(me: Self) -> KeepAlive {
+    pub fn into_keep_alive(me: Self) -> KeepAlive<World> {
         me.keep_alive
     }
 
-    pub fn keep_alive(me: &Self) -> &KeepAlive {
+    pub fn keep_alive(me: &Self) -> &KeepAlive<World> {
         &me.keep_alive
     }
 
@@ -100,7 +100,11 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
+/// ## Safety
+///
+/// This trait can only be implemented for [`Handle`]s.
+///
+pub unsafe trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
     fn is_alive(&self, w: Wr) -> bool;
 
     fn pointee_type(&self) -> TypeId;
@@ -114,7 +118,7 @@ pub trait ErasedHandle: 'static + Send + Sync + fmt::Debug + sealed::Sealed {
 
 impl<T: Handle> sealed::Sealed for T {}
 
-impl<T: Handle> ErasedHandle for T {
+unsafe impl<T: Handle> ErasedHandle for T {
     fn is_alive(&self, w: Wr) -> bool {
         (*self).is_alive(w)
     }
@@ -162,7 +166,6 @@ impl<T: ?Sized + ErasedHandle> PartialEq for Erased<T> {
 
 impl<T: ?Sized + ErasedHandle> Erased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: V) -> Self {
-        // SAFETY: `Handle`s are `repr(transparent)` w.r.t.
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         Self {
@@ -219,7 +222,7 @@ macro_rules! erase {
 #[derive_where(Clone)]
 pub struct StrongErased<T: ?Sized + ErasedHandle> {
     handle: RawHandle,
-    keep_alive: KeepAlive,
+    keep_alive: KeepAlive<World>,
     unerase: fn(&RawHandle) -> &T,
 }
 
@@ -241,7 +244,6 @@ impl<T: ?Sized + ErasedHandle> PartialEq for StrongErased<T> {
 
 impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
-        // SAFETY: `V: Handle` is `repr(transparent)` w.r.t. `RawHandle` so this is a safe type-pun.
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         let raw_handle = handle.raw_handle();
@@ -258,7 +260,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         self.handle
     }
 
-    pub fn keep_alive(&self) -> &KeepAlive {
+    pub fn keep_alive(&self) -> &KeepAlive<World> {
         &self.keep_alive
     }
 

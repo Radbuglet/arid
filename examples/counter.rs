@@ -1,4 +1,4 @@
-use boao::{Component, ErasedHandle, Handle, Strong, W, World, Wr, component, erase_strong, flush};
+use boao::{Component, ErasedHandle, Handle, Meta, Strong, W, World, Wr, component, erase_strong};
 
 #[derive(Debug)]
 pub struct MyNode {
@@ -7,7 +7,15 @@ pub struct MyNode {
     chain: Option<MyNodeHandle>,
 }
 
-component!(MyNode in WorldNs);
+component!(MyNode[u32]);
+
+impl Meta<MyNodeHandle> for u32 {
+    type ArenaAnnotation = ();
+
+    fn despawn(handle: MyNodeHandle, w: W) {
+        handle.despawn_now(w);
+    }
+}
 
 impl MyNodeHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -45,7 +53,7 @@ impl AbstractCounter for MyNodeHandle {
 }
 
 fn main() {
-    let mut w = World::acquire();
+    let mut w = World::new();
     let w = &mut w;
 
     let node = MyNodeHandle::new(w);
@@ -53,6 +61,10 @@ fn main() {
     let other = MyNodeHandle::new(w);
     other.m(w).chain = Some(*other);
     node.m(w).chain = Some(*other);
+
+    *other.meta_mut(w) += 1;
+    dbg!(node.meta(w));
+    dbg!(other.meta(w));
 
     let node = erase_strong!(as dyn AbstractCounter, node);
 
@@ -72,7 +84,7 @@ fn main() {
 
     drop(node);
 
-    flush(w);
+    w.flush();
 
     dbg!(node_ref.debug(w));
     dbg!(other.debug(w));

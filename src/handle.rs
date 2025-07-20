@@ -1,9 +1,10 @@
-use std::{fmt, hash, mem::ManuallyDrop, thread::LocalKey};
+use std::{fmt, hash};
 
 use bytemuck::TransparentWrapper;
 use derive_where::derive_where;
+use late_struct::LateField;
 
-use crate::{Arena, KeepAlive, RawHandle, Strong, W, World, WorldCell, Wr};
+use crate::{Arena, ArenaManager, RawHandle, Strong, W, World, Wr, world_ns};
 
 // === DebugHandle === //
 
@@ -28,8 +29,6 @@ mod rich_fmt {
     #[must_use]
     fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
         let was_inserted = REENTRANT_DEBUGS.with(|set| {
-            // SAFETY: the `REENTRANT_DEBUGS` TLS item is only ever accessed in this module
-            // non-reentrantly.
             unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Component>()))
         });
 
@@ -39,8 +38,6 @@ mod rich_fmt {
 
         Some(scopeguard::guard((), move |()| {
             REENTRANT_DEBUGS.with(|set| {
-                // SAFETY: the `REENTRANT_DEBUGS` TLS item is only ever accessed in this module
-                // non-reentrantly.
                 unsafe { &mut *set.get() }
                     .remove(&(handle.raw_handle(), TypeId::of::<T::Component>()))
             });
@@ -83,97 +80,74 @@ impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
     }
 }
 
-// === ArenaTls === //
+// === Meta === //
 
-#[derive_where(Copy, Clone)]
-pub struct ArenaTls<T: Component> {
-    tls: &'static LocalKey<ArenaTlsPointee<T>>,
+#[derive_where(Debug, Default)]
+pub struct ComponentArena<T: Component> {
+    pub arena: Arena<ComponentSlot<T>, World>,
+    pub meta: T::MetaArena,
 }
 
-impl<T: Component> ArenaTls<T> {
-    pub const fn wrap(tls: &'static LocalKey<ArenaTlsPointee<T>>) -> Self {
-        Self { tls }
-    }
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Default)]
+pub struct ComponentSlot<T: Component> {
+    pub value: T,
+    pub meta: T::Meta,
+}
 
-    pub fn insert(self, value: T, w: W) -> (RawHandle, KeepAlive) {
-        self.tls
-            .with(|arena| arena.inner.borrow_mut(w).insert(value))
-    }
+pub trait Meta<T: Handle>: Sized + 'static {
+    type ArenaAnnotation: 'static + Default + fmt::Debug;
 
-    pub fn upgrade(self, handle: RawHandle, w: W) -> Option<KeepAlive> {
-        self.tls
-            .with(|arena| arena.inner.borrow_mut(w).upgrade(handle))
-    }
+    fn despawn(handle: T, w: W);
 
-    pub fn get<'a>(self, handle: RawHandle, w: Wr<'a>) -> Option<&'a T> {
-        self.tls.with(|arena| {
-            arena
-                .inner
-                .borrow(w)
-                .get(handle)
-                // SAFETY: This reference is derived from a `Vec` which is only dropped if the
-                // `World` be acquired exclusively. This means that this borrow must end before the
-                // vector is dropped.
-                .map(|v| unsafe { &*(v as *const T) })
-        })
-    }
-
-    pub fn get_mut<'a>(self, handle: RawHandle, w: W<'a>) -> Option<&'a mut T> {
-        self.tls.with(|arena| {
-            arena
-                .inner
-                .borrow_mut(w)
-                .get_mut(handle)
-                // SAFETY: This reference is derived from a `Vec` which is only dropped if the
-                // `World` be acquired exclusively. This means that this borrow must end before the
-                // vector is dropped.
-                .map(|v| unsafe { &mut *(v as *mut T) })
-        })
+    fn despawn_raw(handle: RawHandle, w: W) {
+        Self::despawn(T::wrap(handle), w);
     }
 }
 
-pub struct ArenaTlsPointee<T: Component> {
-    inner: ManuallyDrop<WorldCell<Arena<T>>>,
-}
+impl<T: Handle> Meta<T> for () {
+    type ArenaAnnotation = ();
 
-impl<T: Component> ArenaTlsPointee<T> {
-    #[expect(clippy::new_without_default)]
-    pub const fn new() -> Self {
-        Self {
-            inner: ManuallyDrop::new(WorldCell::new(Arena::new(Self::destructor))),
-        }
-    }
-
-    fn destructor(handle: RawHandle, w: W) {
-        T::tls().tls.with(|arena| {
-            _ = arena.inner.borrow_mut(w).try_commit_removal(handle);
-        });
-    }
-}
-
-impl<T: Component> Drop for ArenaTlsPointee<T> {
-    fn drop(&mut self) {
-        if let Err(err) = World::try_acquire() {
-            panic!("failed to acquire world token while dropping thread's TLS: {err:?}");
-        }
-
-        // SAFETY: we can drop this value at most once in this destructor.
-        unsafe { ManuallyDrop::drop(&mut self.inner) }
+    fn despawn(handle: T, w: W) {
+        handle.despawn_now(w);
     }
 }
 
 // === Traits === //
 
-pub trait Component: 'static + Sized + fmt::Debug {
-    type Handle: Handle<Component = Self>;
+pub trait Component:
+    'static + Sized + fmt::Debug + LateField<world_ns::WorldNs, Value = ComponentArena<Self>>
+{
+    type MetaArena: 'static + Default + fmt::Debug;
+    type Meta: Meta<Self::Handle, ArenaAnnotation = Self::MetaArena>;
+    type Handle: Handle<MetaArena = Self::MetaArena, Meta = Self::Meta, Component = Self>;
 
-    fn tls() -> ArenaTls<Self>;
+    fn arena(w: Wr) -> &ComponentArena<Self> {
+        w.inner.get::<Self>()
+    }
+
+    fn arena_mut(w: W) -> &mut ComponentArena<Self> {
+        w.inner.get_mut::<Self>()
+    }
 
     #[must_use]
-    fn spawn(self, w: W) -> Strong<Self::Handle> {
-        let (handle, keep_alive) = Self::tls().insert(self, w);
+    fn spawn(self, w: W) -> Strong<Self::Handle>
+    where
+        Self::Meta: Default,
+    {
+        self.spawn_with(Self::Meta::default(), w)
+    }
 
-        Strong::new(Self::Handle::wrap_raw(handle), keep_alive)
+    #[must_use]
+    fn spawn_with(self, meta: Self::Meta, w: W) -> Strong<Self::Handle> {
+        let (arena, manager) = w.inner.get_two::<Self, ArenaManager<World>>();
+
+        let (keep_alive, handle) = arena.arena.insert(
+            manager,
+            <Self::Meta as Meta<Self::Handle>>::despawn_raw,
+            ComponentSlot { value: self, meta },
+        );
+
+        Strong::new(Self::Handle::wrap(handle), keep_alive)
     }
 }
 
@@ -189,11 +163,9 @@ pub trait Handle:
     + Ord
     + TransparentWrapper<RawHandle>
 {
-    type Component: Component<Handle = Self>;
-
-    fn tls() -> ArenaTls<Self::Component> {
-        Self::Component::tls()
-    }
+    type MetaArena: 'static + Default + fmt::Debug;
+    type Meta: Meta<Self, ArenaAnnotation = Self::MetaArena>;
+    type Component: Component<MetaArena = Self::MetaArena, Meta = Self::Meta, Handle = Self>;
 
     fn wrap_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
@@ -203,28 +175,70 @@ pub trait Handle:
         TransparentWrapper::peel(self)
     }
 
-    fn try_get(self, w: Wr<'_>) -> Option<&Self::Component> {
-        Self::tls().get(self.raw_handle(), w)
+    fn try_slot(self, w: Wr) -> Option<&ComponentSlot<Self::Component>> {
+        w.inner
+            .get::<Self::Component>()
+            .arena
+            .get(self.raw_handle())
     }
 
-    fn try_get_mut(self, w: W<'_>) -> Option<&mut Self::Component> {
-        Self::tls().get_mut(self.raw_handle(), w)
+    fn try_slot_mut(self, w: W) -> Option<&mut ComponentSlot<Self::Component>> {
+        w.inner
+            .get_mut::<Self::Component>()
+            .arena
+            .get_mut(self.raw_handle())
     }
 
     #[track_caller]
-    fn get(self, w: Wr<'_>) -> &Self::Component {
-        match self.try_get(w) {
+    fn slot(self, w: Wr) -> &ComponentSlot<Self::Component> {
+        match self.try_slot(w) {
             Some(v) => v,
             None => panic!("attempted to access dangling handle {self:?}"),
         }
+    }
+
+    #[track_caller]
+    fn slot_mut(self, w: W) -> &mut ComponentSlot<Self::Component> {
+        match self.try_slot_mut(w) {
+            Some(v) => v,
+            None => panic!("attempted to access dangling handle {self:?}"),
+        }
+    }
+
+    fn try_get(self, w: Wr) -> Option<&Self::Component> {
+        self.try_slot(w).map(|v| &v.value)
+    }
+
+    fn try_get_mut(self, w: W) -> Option<&mut Self::Component> {
+        self.try_slot_mut(w).map(|v| &mut v.value)
+    }
+
+    #[track_caller]
+    fn get(self, w: Wr) -> &Self::Component {
+        &self.slot(w).value
     }
 
     #[track_caller]
     fn get_mut(self, w: W) -> &mut Self::Component {
-        match self.try_get_mut(w) {
-            Some(v) => v,
-            None => panic!("attempted to access dangling handle {self:?}"),
-        }
+        &mut self.slot_mut(w).value
+    }
+
+    fn try_meta(self, w: Wr) -> Option<&Self::Meta> {
+        self.try_slot(w).map(|v| &v.meta)
+    }
+
+    fn try_get_meta(self, w: W) -> Option<&mut Self::Meta> {
+        self.try_slot_mut(w).map(|v| &mut v.meta)
+    }
+
+    #[track_caller]
+    fn meta(self, w: Wr) -> &Self::Meta {
+        &self.slot(w).meta
+    }
+
+    #[track_caller]
+    fn meta_mut(self, w: W) -> &mut Self::Meta {
+        &mut self.slot_mut(w).meta
     }
 
     #[track_caller]
@@ -242,14 +256,16 @@ pub trait Handle:
     }
 
     #[track_caller]
-    fn as_strong_if_alive(self, w: W) -> Option<Strong<Self>> {
-        Self::tls()
-            .upgrade(self.raw_handle(), w)
+    fn as_strong_if_alive(self, w: Wr) -> Option<Strong<Self>> {
+        w.inner
+            .get::<Self::Component>()
+            .arena
+            .upgrade(w.inner.get::<ArenaManager<World>>(), self.raw_handle())
             .map(|keep_alive| Strong::new(self, keep_alive))
     }
 
     #[track_caller]
-    fn as_strong(self, w: W) -> Strong<Self> {
+    fn as_strong(self, w: Wr) -> Strong<Self> {
         match self.as_strong_if_alive(w) {
             Some(v) => v,
             None => panic!("attempted to upgrade dangling handle {self:?}"),
@@ -257,11 +273,18 @@ pub trait Handle:
     }
 
     #[must_use]
-    fn debug<'a>(self, w: Wr<'a>) -> DebugHandle<'a, Self> {
+    fn debug(self, w: Wr) -> DebugHandle<'_, Self> {
         DebugHandle {
             world: w,
             handle: self,
         }
+    }
+
+    fn despawn_now(self, w: W) -> Option<ComponentSlot<Self::Component>> {
+        w.inner
+            .get_mut::<Self::Component>()
+            .arena
+            .remove_now(self.raw_handle())
     }
 }
 
@@ -270,8 +293,11 @@ pub trait Handle:
 #[doc(hidden)]
 pub mod component_internals {
     pub use {
-        crate::{ArenaTls, ArenaTlsPointee, Component, Handle, RawHandle, format_handle},
+        crate::{
+            Component, ComponentArena, Handle, Meta, RawHandle, format_handle, world_ns::WorldNs,
+        },
         bytemuck::TransparentWrapper,
+        late_struct::late_field,
         paste::paste,
         std::{
             clone::Clone,
@@ -279,16 +305,13 @@ pub mod component_internals {
             fmt,
             hash::Hash,
             marker::Copy,
-            thread_local,
         },
     };
 }
 
 #[macro_export]
 macro_rules! component {
-    (
-        $( $ty:ident $([$meta:ty])? ),*$(,)? in $namespace:ty
-    ) => {$(
+    ( $( $ty:ident $([$meta:ty])? ),*$(,)? ) => {$(
         $crate::component_internals::paste! {
             #[derive(
                 $crate::component_internals::Copy,
@@ -309,20 +332,19 @@ macro_rules! component {
                 }
             }
 
+            $crate::component_internals::late_field!(
+                $ty[$crate::component_internals::WorldNs] => $crate::component_internals::ComponentArena<$ty>
+            );
+
             impl $crate::component_internals::Component for $ty {
+                type MetaArena = <($($meta)?) as $crate::component_internals::Meta<[<$ty Handle>]>>::ArenaAnnotation;
+                type Meta = ($($meta)?);
                 type Handle = [<$ty Handle>];
-
-                fn tls() -> $crate::component_internals::ArenaTls<$ty> {
-                    $crate::component_internals::thread_local! {
-                        static ARENA: $crate::component_internals::ArenaTlsPointee<$ty>
-                            = const { $crate::component_internals::ArenaTlsPointee::<$ty>::new() };
-                    }
-
-                    $crate::component_internals::ArenaTls::wrap(&ARENA)
-                }
             }
 
             impl $crate::component_internals::Handle for [<$ty Handle>] {
+                type MetaArena = <($($meta)?) as $crate::component_internals::Meta<[<$ty Handle>]>>::ArenaAnnotation;
+                type Meta = ($($meta)?);
                 type Component = $ty;
             }
         }

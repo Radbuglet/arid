@@ -1,13 +1,15 @@
-#![forbid(clippy::undocumented_unsafe_blocks)]
+pub extern crate late_struct;
+
+mod utils;
 
 mod arena;
-pub use arena::*;
+pub use self::arena::*;
 
 mod handle;
-pub use handle::*;
+pub use self::handle::*;
 
 mod world;
-pub use world::*;
+pub use self::world::*;
 
 mod wrappers;
-pub use wrappers::*;
+pub use self::wrappers::*;
