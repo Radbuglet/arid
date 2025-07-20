@@ -1,5 +1,6 @@
 use boao::{Arena, ArenaManager, Component, Handle, World, component};
 use criterion::{Criterion, criterion_group, criterion_main};
+use late_struct::{LateInstance, late_field, late_struct};
 
 #[derive(Debug)]
 pub struct Counter(u32);
@@ -35,6 +36,47 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             *arena.get_mut(handle).unwrap() += 1;
             *arena.get_mut(handle).unwrap() += 1;
+        });
+    });
+
+    c.bench_function("repeated_addition/late_deref_single", |b| {
+        struct Ns;
+
+        late_struct!(Ns);
+
+        late_field!(ArenaManager<()>[Ns]);
+
+        #[rustfmt::skip]
+        late_field!(Arena<u32, ()>[Ns]);
+
+        let mut world = LateInstance::<Ns>::new();
+
+        let (arena, arena_mgr) = world.get_two::<Arena<u32, ()>, ArenaManager<()>>();
+        let (_keep_alive, handle) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
+
+        b.iter(|| {
+            *world.get_mut::<Arena<u32, ()>>().get_mut(handle).unwrap() += 1;
+        });
+    });
+
+    c.bench_function("repeated_addition/late_deref_multi", |b| {
+        struct Ns;
+
+        late_struct!(Ns);
+
+        late_field!(ArenaManager<()>[Ns]);
+
+        #[rustfmt::skip]
+        late_field!(Arena<u32, ()>[Ns]);
+
+        let mut world = LateInstance::<Ns>::new();
+
+        let (arena, arena_mgr) = world.get_two::<Arena<u32, ()>, ArenaManager<()>>();
+        let (_keep_alive, handle) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
+
+        b.iter(|| {
+            *world.get_mut::<Arena<u32, ()>>().get_mut(handle).unwrap() += 1;
+            *world.get_mut::<Arena<u32, ()>>().get_mut(handle).unwrap() += 1;
         });
     });
 

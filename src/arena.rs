@@ -6,7 +6,6 @@ use std::{
 };
 
 use derive_where::derive_where;
-use thin_vec::ThinVec;
 
 use crate::utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong};
 
@@ -55,7 +54,7 @@ impl<S: ?Sized> KeepAliveSlot<S> {
 #[derive_where(Default)]
 pub struct Arena<T, S: ?Sized> {
     header: Box<ArenaHeader<S>>,
-    slots: ThinVec<Slot<T>>,
+    slots: Vec<Slot<T>>,
 }
 
 #[derive_where(Default)]
