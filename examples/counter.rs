@@ -1,4 +1,4 @@
-use boao::{Component, ErasedHandle, Handle, Meta, Strong, W, World, Wr, component, erase_strong};
+use boao::{Component, ErasedHandle, Handle, Strong, W, World, Wr, component, erase_strong};
 
 #[derive(Debug)]
 pub struct MyNode {
@@ -7,15 +7,7 @@ pub struct MyNode {
     chain: Option<MyNodeHandle>,
 }
 
-component!(MyNode[u32]);
-
-impl Meta<MyNodeHandle> for u32 {
-    type ArenaAnnotation = ();
-
-    fn despawn(handle: MyNodeHandle, w: W) {
-        handle.despawn_now(w);
-    }
-}
+component!(MyNode);
 
 impl MyNodeHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -61,10 +53,6 @@ fn main() {
     let other = MyNodeHandle::new(w);
     other.m(w).chain = Some(*other);
     node.m(w).chain = Some(*other);
-
-    *other.meta_mut(w) += 1;
-    dbg!(node.meta(w));
-    dbg!(other.meta(w));
 
     let node = erase_strong!(as dyn AbstractCounter, node);
 
