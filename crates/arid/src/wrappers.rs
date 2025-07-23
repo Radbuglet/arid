@@ -124,11 +124,11 @@ unsafe impl<T: Handle> ErasedHandle for T {
     }
 
     fn pointee_type(&self) -> TypeId {
-        TypeId::of::<T::Component>()
+        TypeId::of::<T::Object>()
     }
 
     fn pointee_name(&self) -> &'static str {
-        type_name::<T::Component>()
+        type_name::<T::Object>()
     }
 
     fn handle_type(&self) -> TypeId {
@@ -179,8 +179,7 @@ impl<T: ?Sized + ErasedHandle> Erased<T> {
     }
 
     pub fn try_downcast<V: Handle>(self) -> Option<V> {
-        (self.pointee_type() == TypeId::of::<V::Component>())
-            .then(|| V::wrap_raw(self.raw_handle()))
+        (self.pointee_type() == TypeId::of::<V::Object>()).then(|| V::wrap_raw(self.raw_handle()))
     }
 
     #[track_caller]
@@ -190,7 +189,7 @@ impl<T: ?Sized + ErasedHandle> Erased<T> {
             None => panic!(
                 "attempted to downcast value of type {} into {}",
                 self.pointee_name(),
-                type_name::<V::Component>(),
+                type_name::<V::Object>(),
             ),
         }
     }
@@ -272,7 +271,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     }
 
     pub fn try_downcast<V: Handle>(self) -> Result<Strong<V>, Self> {
-        if self.pointee_type() == TypeId::of::<V::Component>() {
+        if self.pointee_type() == TypeId::of::<V::Object>() {
             Ok(Strong {
                 handle: V::wrap_raw(self.raw_handle()),
                 keep_alive: self.keep_alive,
@@ -293,7 +292,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
             Err(me) => panic!(
                 "attempted to downcast value of type {} into {}",
                 me.pointee_name(),
-                type_name::<V::Component>(),
+                type_name::<V::Object>(),
             ),
         }
     }

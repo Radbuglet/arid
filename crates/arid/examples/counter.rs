@@ -1,4 +1,4 @@
-use arid::{component, erase_strong, Component, ErasedHandle, Handle, Strong, World, Wr, W};
+use arid::{ErasedHandle, Handle, Object, Strong, W, World, Wr, erase_strong, object};
 
 #[derive(Debug)]
 pub struct MyNode {
@@ -7,7 +7,7 @@ pub struct MyNode {
     chain: Option<MyNodeHandle>,
 }
 
-component!(MyNode);
+object!(MyNode);
 
 impl MyNodeHandle {
     pub fn new(w: W) -> Strong<Self> {

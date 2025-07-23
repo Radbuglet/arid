@@ -1,11 +1,11 @@
-use arid::{component, Arena, ArenaManager, Component, Handle, World};
-use criterion::{criterion_group, criterion_main, Criterion};
-use late_struct::{late_field, late_struct, LateInstance};
+use arid::{Arena, ArenaManager, Handle, Object, World, object};
+use criterion::{Criterion, criterion_group, criterion_main};
+use late_struct::{LateInstance, late_field, late_struct};
 
 #[derive(Debug)]
 pub struct Counter(u32);
 
-component!(Counter);
+object!(Counter);
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("repeated_addition/direct_access", |b| {

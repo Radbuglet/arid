@@ -141,7 +141,7 @@ pub unsafe trait Handle: Sized + 'static + fmt::Debug + Copy + Eq + Ord {
 }
 
 #[doc(hidden)]
-pub mod component_internals {
+pub mod object_internals {
     use super::can_format_handle;
 
     pub use {
@@ -191,56 +191,56 @@ pub mod component_internals {
 #[macro_export]
 macro_rules! component {
     ($($name:ident),*$(,)?) => {$(
-        $crate::entity::component_internals::paste! {
+        $crate::entity::object_internals::paste! {
             #[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
             #[repr(transparent)]
             pub struct [<$name Handle>] {
-                pub raw: $crate::entity::component_internals::Index,
+                pub raw: $crate::entity::object_internals::Index,
             }
 
-            impl $crate::entity::component_internals::fmt::Debug for [<$name Handle>] {
+            impl $crate::entity::object_internals::fmt::Debug for [<$name Handle>] {
                 fn fmt(
                     &self,
-                    f: &mut $crate::entity::component_internals::fmt::Formatter<'_>,
-                ) -> $crate::entity::component_internals::fmt::Result {
-                    $crate::entity::component_internals::format_handle(f, *self)
+                    f: &mut $crate::entity::object_internals::fmt::Formatter<'_>,
+                ) -> $crate::entity::object_internals::fmt::Result {
+                    $crate::entity::object_internals::format_handle(f, *self)
                 }
             }
 
             impl [<$name Handle>] {
                 pub const DANGLING: Self =
-                    Self::wrap_raw($crate::entity::component_internals::Index::DANGLING);
+                    Self::wrap_raw($crate::entity::object_internals::Index::DANGLING);
 
-                pub const fn wrap_raw(raw: $crate::entity::component_internals::Index) -> Self {
+                pub const fn wrap_raw(raw: $crate::entity::object_internals::Index) -> Self {
                     Self { raw }
                 }
 
-                pub const fn raw(self) -> $crate::entity::component_internals::Index {
+                pub const fn raw(self) -> $crate::entity::object_internals::Index {
                     self.raw
                 }
             }
 
-            unsafe impl $crate::entity::component_internals::Component for $name {
+            unsafe impl $crate::entity::object_internals::Component for $name {
                 type Handle = [<$name Handle>];
             }
 
-            unsafe impl $crate::entity::component_internals::Handle for [<$name Handle>] {
+            unsafe impl $crate::entity::object_internals::Handle for [<$name Handle>] {
                 type Component = $name;
 
                 const DANGLING: Self = Self::DANGLING;
 
-                fn wrap_raw(index: $crate::entity::component_internals::Index) -> Self {
+                fn wrap_raw(index: $crate::entity::object_internals::Index) -> Self {
                     Self::wrap_raw(index)
                 }
 
-                fn raw(self) -> $crate::entity::component_internals::Index {
+                fn raw(self) -> $crate::entity::object_internals::Index {
                     self.raw()
                 }
             }
 
-            $crate::entity::component_internals::late_field!(
-                $name [$crate::entity::component_internals::World]
-                    => $crate::entity::component_internals::Storage<$name>
+            $crate::entity::object_internals::late_field!(
+                $name [$crate::entity::object_internals::World]
+                    => $crate::entity::object_internals::Storage<$name>
             );
         }
     )*};

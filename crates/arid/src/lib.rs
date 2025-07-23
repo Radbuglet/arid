@@ -1,5 +1,3 @@
-pub extern crate late_struct;
-
 mod utils;
 
 mod arena;

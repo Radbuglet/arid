@@ -29,7 +29,7 @@ mod rich_fmt {
     #[must_use]
     fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
         let was_inserted = REENTRANT_DEBUGS.with(|set| {
-            unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Component>()))
+            unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Object>()))
         });
 
         if !was_inserted {
@@ -38,15 +38,14 @@ mod rich_fmt {
 
         Some(scopeguard::guard((), move |()| {
             REENTRANT_DEBUGS.with(|set| {
-                unsafe { &mut *set.get() }
-                    .remove(&(handle.raw_handle(), TypeId::of::<T::Component>()))
+                unsafe { &mut *set.get() }.remove(&(handle.raw_handle(), TypeId::of::<T::Object>()))
             });
         }))
     }
 
     pub fn format_handle<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
         World::fetch_tls(|cx| {
-            f.write_str(type_name::<T::Component>())?;
+            f.write_str(type_name::<T::Object>())?;
             handle.raw_handle().fmt(f)?;
 
             if let Some(cx) = cx
@@ -82,15 +81,15 @@ impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
 
 // === Meta === //
 
-pub trait ComponentArena: 'static + Default + fmt::Debug {
-    type Component: Component<Handle = Self::Handle, Arena = Self>;
-    type Handle: Handle<Component = Self::Component, Arena = Self>;
+pub trait ObjectArena: 'static + Default + fmt::Debug {
+    type Object: Object<Handle = Self::Handle, Arena = Self>;
+    type Handle: Handle<Object = Self::Object, Arena = Self>;
 
     // === Accessors === //
 
     #[must_use]
     fn arena(w: Wr<'_>) -> &Self {
-        w.inner.get::<Self::Component>()
+        w.inner.get::<Self::Object>()
     }
 
     #[must_use]
@@ -100,17 +99,17 @@ pub trait ComponentArena: 'static + Default + fmt::Debug {
 
     #[must_use]
     fn arena_mut(w: W<'_>) -> &mut Self {
-        w.inner.get_mut::<Self::Component>()
+        w.inner.get_mut::<Self::Object>()
     }
 
     #[must_use]
     fn arena_and_manager_mut(w: W<'_>) -> (&mut Self, &mut ArenaManager<World>) {
-        w.inner.get_two::<Self::Component, ArenaManager<World>>()
+        w.inner.get_two::<Self::Object, ArenaManager<World>>()
     }
 
     // === Hooks === //
 
-    fn insert(value: Self::Component, w: W) -> Strong<Self::Handle>;
+    fn insert(value: Self::Object, w: W) -> Strong<Self::Handle>;
 
     fn despawn(handle: Self::Handle, w: W);
 
@@ -118,18 +117,18 @@ pub trait ComponentArena: 'static + Default + fmt::Debug {
         Self::despawn(Self::Handle::wrap(handle), w);
     }
 
-    fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Component>;
+    fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object>;
 
-    fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Component>;
+    fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object>;
 
     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>>;
 }
 
-impl<T: Component<Arena = Self>> ComponentArena for Arena<T, World> {
-    type Component = T;
+impl<T: Object<Arena = Self>> ObjectArena for Arena<T, World> {
+    type Object = T;
     type Handle = T::Handle;
 
-    fn insert(value: Self::Component, w: W) -> Strong<Self::Handle> {
+    fn insert(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (arena, manager) = Self::arena_and_manager_mut(w);
 
         let (keep_alive, handle) = arena.insert(manager, Self::despawn_raw, value);
@@ -141,11 +140,11 @@ impl<T: Component<Arena = Self>> ComponentArena for Arena<T, World> {
         Self::arena_mut(w).remove_now(handle.raw_handle());
     }
 
-    fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Component> {
+    fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
         Self::arena(w).get(handle.raw_handle())
     }
 
-    fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Component> {
+    fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
         Self::arena_mut(w).get_mut(handle.raw_handle())
     }
 
@@ -158,11 +157,11 @@ impl<T: Component<Arena = Self>> ComponentArena for Arena<T, World> {
 
 // === Traits === //
 
-pub trait Component:
+pub trait Object:
     'static + Sized + fmt::Debug + LateField<world_ns::WorldNs, Value = Self::Arena>
 {
-    type Arena: ComponentArena<Component = Self, Handle = Self::Handle>;
-    type Handle: Handle<Arena = Self::Arena, Component = Self>;
+    type Arena: ObjectArena<Object = Self, Handle = Self::Handle>;
+    type Handle: Handle<Arena = Self::Arena, Object = Self>;
 
     #[must_use]
     fn spawn(self, w: W) -> Strong<Self::Handle> {
@@ -182,8 +181,8 @@ pub trait Handle:
     + Ord
     + TransparentWrapper<RawHandle>
 {
-    type Arena: ComponentArena<Component = Self::Component, Handle = Self>;
-    type Component: Component<Arena = Self::Arena, Handle = Self>;
+    type Arena: ObjectArena<Object = Self::Object, Handle = Self>;
+    type Object: Object<Arena = Self::Arena, Handle = Self>;
 
     fn wrap_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
@@ -193,16 +192,16 @@ pub trait Handle:
         TransparentWrapper::peel(self)
     }
 
-    fn try_get(self, w: Wr) -> Option<&Self::Component> {
+    fn try_get(self, w: Wr) -> Option<&Self::Object> {
         Self::Arena::try_get(self, w)
     }
 
-    fn try_get_mut(self, w: W) -> Option<&mut Self::Component> {
+    fn try_get_mut(self, w: W) -> Option<&mut Self::Object> {
         Self::Arena::try_get_mut(self, w)
     }
 
     #[track_caller]
-    fn get(self, w: Wr) -> &Self::Component {
+    fn get(self, w: Wr) -> &Self::Object {
         match self.try_get(w) {
             Some(v) => v,
             None => panic!("attempted to access dangling handle {self:?}"),
@@ -210,7 +209,7 @@ pub trait Handle:
     }
 
     #[track_caller]
-    fn get_mut(self, w: W) -> &mut Self::Component {
+    fn get_mut(self, w: W) -> &mut Self::Object {
         match self.try_get_mut(w) {
             Some(v) => v,
             None => panic!("attempted to access dangling handle {self:?}"),
@@ -218,12 +217,12 @@ pub trait Handle:
     }
 
     #[track_caller]
-    fn r(self, w: Wr) -> &Self::Component {
+    fn r(self, w: Wr) -> &Self::Object {
         self.get(w)
     }
 
     #[track_caller]
-    fn m(self, w: W) -> &mut Self::Component {
+    fn m(self, w: W) -> &mut Self::Object {
         self.get_mut(w)
     }
 
@@ -256,14 +255,12 @@ pub trait Handle:
 // === Macros === //
 
 #[doc(hidden)]
-pub mod component_internals {
+pub mod object_internals {
     use crate::World;
     use std::marker::PhantomData;
 
     pub use {
-        crate::{
-            Arena, Component, ComponentArena, Handle, RawHandle, format_handle, world_ns::WorldNs,
-        },
+        crate::{Arena, Handle, Object, ObjectArena, RawHandle, format_handle, world_ns::WorldNs},
         bytemuck::TransparentWrapper,
         late_struct::late_field,
         paste::paste,
@@ -291,46 +288,46 @@ pub mod component_internals {
 }
 
 #[macro_export]
-macro_rules! component {
+macro_rules! object {
     ( $( $ty:ident $([$arena:ty])? ),*$(,)? ) => {$(
-        $crate::component_internals::paste! {
+        $crate::object_internals::paste! {
             #[derive(
-                $crate::component_internals::Copy,
-                $crate::component_internals::Clone,
-                $crate::component_internals::Hash,
-                $crate::component_internals::Eq,
-                $crate::component_internals::PartialEq,
-                $crate::component_internals::Ord,
-                $crate::component_internals::PartialOrd,
+                $crate::object_internals::Copy,
+                $crate::object_internals::Clone,
+                $crate::object_internals::Hash,
+                $crate::object_internals::Eq,
+                $crate::object_internals::PartialEq,
+                $crate::object_internals::Ord,
+                $crate::object_internals::PartialOrd,
             )]
             #[repr(transparent)]
-            pub struct [<$ty Handle>]($crate::component_internals::RawHandle);
+            pub struct [<$ty Handle>]($crate::object_internals::RawHandle);
 
             unsafe impl
-                $crate::component_internals::TransparentWrapper<$crate::component_internals::RawHandle>
+                $crate::object_internals::TransparentWrapper<$crate::object_internals::RawHandle>
                 for [<$ty Handle>]
             {
             }
 
-            impl $crate::component_internals::fmt::Debug for [<$ty Handle>] {
-                fn fmt(&self, f: &mut $crate::component_internals::fmt::Formatter<'_>) -> $crate::component_internals::fmt::Result {
-                    $crate::component_internals::format_handle(f, *self)
+            impl $crate::object_internals::fmt::Debug for [<$ty Handle>] {
+                fn fmt(&self, f: &mut $crate::object_internals::fmt::Formatter<'_>) -> $crate::object_internals::fmt::Result {
+                    $crate::object_internals::format_handle(f, *self)
                 }
             }
 
-            $crate::component_internals::late_field!(
-                $ty[$crate::component_internals::WorldNs] =>
-                    $crate::component_internals::CustomArenaOrDefault<$ty, $($arena)?>
+            $crate::object_internals::late_field!(
+                $ty[$crate::object_internals::WorldNs] =>
+                    $crate::object_internals::CustomArenaOrDefault<$ty, $($arena)?>
             );
 
-            impl $crate::component_internals::Component for $ty {
-                type Arena = $crate::component_internals::CustomArenaOrDefault<$ty, $($arena)?>;
+            impl $crate::object_internals::Object for $ty {
+                type Arena = $crate::object_internals::CustomArenaOrDefault<$ty, $($arena)?>;
                 type Handle = [<$ty Handle>];
             }
 
-            impl $crate::component_internals::Handle for [<$ty Handle>] {
-                type Arena = $crate::component_internals::CustomArenaOrDefault<$ty, $($arena)?>;
-                type Component = $ty;
+            impl $crate::object_internals::Handle for [<$ty Handle>] {
+                type Arena = $crate::object_internals::CustomArenaOrDefault<$ty, $($arena)?>;
+                type Object = $ty;
             }
         }
     )*};
