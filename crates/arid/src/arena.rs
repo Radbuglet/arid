@@ -7,80 +7,83 @@ use std::{
 
 use derive_where::derive_where;
 
-use crate::utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong};
+use crate::{
+    W,
+    utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong},
+};
 
 // === Arena === //
 
-#[derive_where(Debug)]
-pub struct ArenaManager<S: ?Sized> {
-    uid: NonZeroU64,
-    listener: KeepAliveList<KeepAliveSlot<S>>,
-}
+#[derive(Debug)]
+#[non_exhaustive]
+pub(crate) struct ArenaManagerWrapper(pub(crate) ArenaManager);
 
-impl<S: ?Sized> Default for ArenaManager<S> {
+impl Default for ArenaManagerWrapper {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<S: ?Sized> ArenaManager<S> {
-    pub fn new() -> Self {
         static UID_GEN: AtomicU64 = AtomicU64::new(1);
 
-        Self {
+        Self(ArenaManager {
             uid: NonZeroU64::new(UID_GEN.fetch_add(1, Relaxed)).unwrap(),
             listener: KeepAliveList::default(),
-        }
+        })
     }
+}
 
-    #[must_use]
-    pub fn take_condemned(&mut self) -> Option<KeepAliveSlot<S>> {
+#[derive(Debug)]
+pub struct ArenaManager {
+    uid: NonZeroU64,
+    listener: KeepAliveList<KeepAliveSlot>,
+}
+
+impl ArenaManager {
+    // Used in `crate::world`.
+    pub(crate) fn take_condemned(&mut self) -> Option<KeepAliveSlot> {
         self.listener.take_condemned().map(|v| v.1)
     }
 }
 
-#[derive_where(Debug, Copy, Clone)]
-pub struct KeepAliveSlot<S: ?Sized> {
-    pub handle: RawHandle,
-    pub destructor: fn(RawHandle, &mut S),
+#[derive(Debug, Copy, Clone)]
+pub struct KeepAliveSlot {
+    pub slot_idx: u32,
+    pub destructor: fn(slot_idx: u32, w: W),
 }
 
-impl<S: ?Sized> KeepAliveSlot<S> {
-    pub fn process(self, cx: &mut S) {
-        (self.destructor)(self.handle, cx)
+impl KeepAliveSlot {
+    pub fn process(self, w: W) {
+        (self.destructor)(self.slot_idx, w)
     }
 }
 
 #[derive_where(Default)]
-pub struct Arena<T, S: ?Sized> {
-    header: Box<ArenaHeader<S>>,
+pub struct Arena<T> {
+    header: Box<ArenaHeader>,
     slots: Vec<Slot<T>>,
 }
 
-#[derive_where(Default)]
-struct ArenaHeader<S: ?Sized> {
+#[derive(Default)]
+struct ArenaHeader {
     manager_uid: Option<NonZeroU64>,
-    keep_alive_slots: Vec<KeepAlivePtr<KeepAliveSlot<S>>>,
+    keep_alive_slots: Vec<KeepAlivePtr<KeepAliveSlot>>,
     free_slots: Vec<u32>,
 }
 
-impl<T, S: ?Sized> fmt::Debug for Arena<T, S> {
+impl<T> fmt::Debug for Arena<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Arena").finish_non_exhaustive()
     }
 }
 
-impl<T, S: ?Sized> Arena<T, S> {
+impl<T> Arena<T> {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn insert(
         &mut self,
-        manager: &mut ArenaManager<S>,
-        destructor: fn(RawHandle, &mut S),
+        manager: &mut ArenaManager,
+        destructor: fn(slot_idx: u32, w: W),
         value: T,
-    ) -> (RawHandle, KeepAlive<S>) {
+    ) -> (RawHandle, KeepAlive) {
         // Ensure that we're always allocating keep-alive slots from the same manager.
         if let Some(manager_uid) = self.header.manager_uid {
             assert_eq!(manager.uid, manager_uid);
@@ -120,19 +123,29 @@ impl<T, S: ?Sized> Arena<T, S> {
             generation: NonZeroU32::new(1).unwrap(),
         };
 
-        let keep_alive = KeepAlive(manager.listener.spawn(KeepAliveSlot { handle, destructor }));
+        let keep_alive = KeepAlive(manager.listener.spawn(KeepAliveSlot {
+            slot_idx,
+            destructor,
+        }));
 
         self.header.keep_alive_slots.push(keep_alive.0.ptr());
 
         (handle, keep_alive)
     }
 
-    pub fn remove_now(&mut self, handle: RawHandle) -> Option<T> {
-        let slot = &mut self.slots[handle.slot_idx as usize];
+    pub fn slot_to_handle(&self, slot_idx: u32) -> Option<RawHandle> {
+        let state = &self.slots[slot_idx as usize];
 
-        if slot.generation != handle.generation.get() {
-            return None;
-        }
+        (state.generation % 2 == 1).then(|| RawHandle {
+            slot_idx,
+            generation: NonZeroU32::new(state.generation).unwrap(),
+        })
+    }
+
+    pub fn remove_now(&mut self, slot_idx: u32) -> Option<T> {
+        let slot = &mut self.slots[slot_idx as usize];
+
+        assert!(slot.generation % 2 == 1, "attempted to remove a dead slot");
 
         // Take slot contents and mark it as invalid.
         slot.generation += 1;
@@ -142,13 +155,13 @@ impl<T, S: ?Sized> Arena<T, S> {
         // Ensure that the generation never reaches a point where it could never be safely
         // invalidated.
         if slot.generation != u32::MAX - 1 {
-            self.header.free_slots.push(handle.slot_idx);
+            self.header.free_slots.push(slot_idx);
         }
 
         Some(value)
     }
 
-    pub fn upgrade(&self, manager: &ArenaManager<S>, handle: RawHandle) -> Option<KeepAlive<S>> {
+    pub fn upgrade(&self, manager: &ArenaManager, handle: RawHandle) -> Option<KeepAlive> {
         assert_eq!(Some(manager.uid), self.header.manager_uid);
 
         // Ensure the handle is live.
@@ -206,8 +219,8 @@ impl<T> Drop for Slot<T> {
 
 // === Handles === //
 
-#[derive_where(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct KeepAlive<S: ?Sized>(KeepAliveStrong<KeepAliveSlot<S>>);
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct KeepAlive(KeepAliveStrong<KeepAliveSlot>);
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RawHandle {

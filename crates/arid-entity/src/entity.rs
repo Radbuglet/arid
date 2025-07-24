@@ -1,6 +1,6 @@
 use std::any::type_name;
 
-use arid::{Arena, ArenaForHandle, Handle, Object, ObjectArena, Strong, W, World, Wr, object};
+use arid::{Arena, ArenaForHandle, Handle, Object, ObjectArena, Strong, W, Wr, object};
 use derive_where::derive_where;
 use rustc_hash::FxHashMap;
 
@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 #[non_exhaustive]
 pub struct Entity {}
 
-object!(Entity);
+object!(Entity[EntityArena]);
 
 impl EntityHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -48,6 +48,46 @@ impl EntityHandle {
                 type_name::<T::Object>(),
             )
         })
+    }
+}
+
+mod entity_arena {
+    use super::*;
+
+    #[derive(Debug, Default)]
+    pub struct EntityArena {
+        arena: Arena<Entity>,
+    }
+}
+
+use entity_arena::EntityArena;
+
+impl ObjectArena for EntityArena {
+    type Object = Entity;
+    type Handle = EntityHandle;
+
+    fn insert(value: Self::Object, w: W) -> Strong<Self::Handle> {
+        todo!()
+    }
+
+    fn despawn(handle: u32, w: W) {
+        todo!()
+    }
+
+    fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
+        todo!()
+    }
+
+    fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
+        todo!()
+    }
+
+    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
+        todo!()
+    }
+
+    fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
+        todo!()
     }
 }
 
@@ -97,7 +137,7 @@ impl<T: Handle<Object: Node>> NodeHandle for T {
 #[derive(Debug)]
 #[derive_where(Default)]
 pub struct NodeArena<T: Object> {
-    arena: Arena<T, World>,
+    arena: Arena<T>,
     annotations: Vec<NodeSlot>,
     entity_map: FxHashMap<EntityHandle, Strong<T::Handle>>,
 }
@@ -114,19 +154,19 @@ impl<T: Object<Arena = Self>> ObjectArena for NodeArena<T> {
     fn insert(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (state, manager) = Self::arena_and_manager_mut(w);
 
-        let (handle, keep_alive) = state.arena.insert(manager, Self::despawn_raw, value);
+        let (handle, keep_alive) = state.arena.insert(manager, Self::despawn, value);
 
         state
             .annotations
             .resize_with(state.arena.len() as usize, NodeSlot::default);
 
-        Strong::new(T::Handle::wrap_raw(handle), keep_alive)
+        Strong::new(T::Handle::from_raw(handle), keep_alive)
     }
 
-    fn despawn(handle: Self::Handle, w: W) {
-        handle.detach_from_entity(w);
+    fn despawn(slot_idx: u32, w: W) {
+        T::Handle::from_slot(slot_idx, w).detach_from_entity(w);
 
-        drop(Self::arena_mut(w).arena.remove_now(handle.raw()));
+        drop(Self::arena_mut(w).arena.remove_now(slot_idx));
     }
 
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
@@ -142,5 +182,12 @@ impl<T: Object<Arena = Self>> ObjectArena for NodeArena<T> {
             .arena
             .upgrade(Self::manager(w), handle.raw())
             .map(|keep_alive| Strong::new(handle, keep_alive))
+    }
+
+    fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
+        Self::arena(w)
+            .arena
+            .slot_to_handle(slot_idx)
+            .map(Self::Handle::from_raw)
     }
 }

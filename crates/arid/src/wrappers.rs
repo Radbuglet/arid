@@ -7,7 +7,7 @@ use std::{
 
 use derive_where::derive_where;
 
-use crate::{Handle, KeepAlive, RawHandle, World, Wr};
+use crate::{Handle, KeepAlive, RawHandle, Wr};
 
 // === Strong === //
 
@@ -15,7 +15,7 @@ use crate::{Handle, KeepAlive, RawHandle, World, Wr};
 pub struct Strong<T: Handle> {
     handle: T,
     #[derive_where(skip)]
-    keep_alive: KeepAlive<World>,
+    keep_alive: KeepAlive,
 }
 
 impl<T: Handle> fmt::Debug for Strong<T> {
@@ -33,15 +33,15 @@ impl<T: Handle> Deref for Strong<T> {
 }
 
 impl<T: Handle> Strong<T> {
-    pub fn new(handle: T, keep_alive: KeepAlive<World>) -> Self {
+    pub fn new(handle: T, keep_alive: KeepAlive) -> Self {
         Self { handle, keep_alive }
     }
 
-    pub fn into_keep_alive(me: Self) -> KeepAlive<World> {
+    pub fn into_keep_alive(me: Self) -> KeepAlive {
         me.keep_alive
     }
 
-    pub fn keep_alive(me: &Self) -> &KeepAlive<World> {
+    pub fn keep_alive(me: &Self) -> &KeepAlive {
         &me.keep_alive
     }
 
@@ -174,12 +174,12 @@ impl<T: ?Sized + ErasedHandle> Erased<T> {
         }
     }
 
-    pub fn raw_handle(self) -> RawHandle {
+    pub fn raw(self) -> RawHandle {
         self.handle
     }
 
     pub fn try_downcast<V: Handle>(self) -> Option<V> {
-        (self.pointee_type() == TypeId::of::<V::Object>()).then(|| V::wrap_raw(self.raw_handle()))
+        (self.pointee_type() == TypeId::of::<V::Object>()).then(|| V::from_raw(self.raw()))
     }
 
     #[track_caller]
@@ -221,7 +221,7 @@ macro_rules! erase {
 #[derive_where(Clone)]
 pub struct StrongErased<T: ?Sized + ErasedHandle> {
     handle: RawHandle,
-    keep_alive: KeepAlive<World>,
+    keep_alive: KeepAlive,
     unerase: fn(&RawHandle) -> &T,
 }
 
@@ -245,27 +245,27 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
-        let raw_handle = handle.raw();
+        let raw = handle.raw();
         let keep_alive = Strong::into_keep_alive(handle);
 
         Self {
-            handle: raw_handle,
+            handle: raw,
             keep_alive,
             unerase,
         }
     }
 
-    pub fn raw_handle(&self) -> RawHandle {
+    pub fn raw(&self) -> RawHandle {
         self.handle
     }
 
-    pub fn keep_alive(&self) -> &KeepAlive<World> {
+    pub fn keep_alive(&self) -> &KeepAlive {
         &self.keep_alive
     }
 
     pub fn downgrade(&self) -> Erased<T> {
         Erased {
-            handle: self.raw_handle(),
+            handle: self.raw(),
             unerase: self.unerase,
         }
     }
@@ -273,7 +273,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     pub fn try_downcast<V: Handle>(self) -> Result<Strong<V>, Self> {
         if self.pointee_type() == TypeId::of::<V::Object>() {
             Ok(Strong {
-                handle: V::wrap_raw(self.raw_handle()),
+                handle: V::from_raw(self.raw()),
                 keep_alive: self.keep_alive,
             })
         } else {

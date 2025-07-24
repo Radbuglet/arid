@@ -2,7 +2,7 @@ use std::{cell::Cell, fmt, ptr::NonNull};
 
 use late_struct::{LateInstance, late_field, late_struct};
 
-use crate::ArenaManager;
+use crate::ArenaManagerWrapper;
 
 thread_local! {
     static WORLD_TLS: Cell<Option<NonNull<World>>> = const { Cell::new(None) };
@@ -23,7 +23,7 @@ pub(crate) mod world_ns {
 
 late_struct!(world_ns::WorldNs);
 
-late_field!(ArenaManager<World>[world_ns::WorldNs]);
+late_field!(ArenaManagerWrapper[world_ns::WorldNs]);
 
 impl fmt::Debug for World {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -37,7 +37,12 @@ impl World {
     }
 
     pub fn flush(&mut self) {
-        while let Some(condemned) = self.inner.get_mut::<ArenaManager<World>>().take_condemned() {
+        while let Some(condemned) = self
+            .inner
+            .get_mut::<ArenaManagerWrapper>()
+            .0
+            .take_condemned()
+        {
             condemned.process(self);
         }
     }
