@@ -169,7 +169,7 @@ impl<T: ?Sized + ErasedHandle> Erased<T> {
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
         Self {
-            handle: handle.raw_handle(),
+            handle: handle.raw(),
             unerase,
         }
     }
@@ -245,7 +245,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     pub fn new<V: Handle>(unerase: fn(&V) -> &T, handle: Strong<V>) -> Self {
         let unerase = unsafe { mem::transmute::<fn(&V) -> &T, fn(&RawHandle) -> &T>(unerase) };
 
-        let raw_handle = handle.raw_handle();
+        let raw_handle = handle.raw();
         let keep_alive = Strong::into_keep_alive(handle);
 
         Self {

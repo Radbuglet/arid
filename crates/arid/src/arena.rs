@@ -80,7 +80,7 @@ impl<T, S: ?Sized> Arena<T, S> {
         manager: &mut ArenaManager<S>,
         destructor: fn(RawHandle, &mut S),
         value: T,
-    ) -> (KeepAlive<S>, RawHandle) {
+    ) -> (RawHandle, KeepAlive<S>) {
         // Ensure that we're always allocating keep-alive slots from the same manager.
         if let Some(manager_uid) = self.header.manager_uid {
             assert_eq!(manager.uid, manager_uid);
@@ -104,7 +104,7 @@ impl<T, S: ?Sized> Arena<T, S> {
                 generation: unsafe { NonZeroU32::new_unchecked(slot.generation) },
             };
 
-            return (keep_alive, handle);
+            return (handle, keep_alive);
         }
 
         // Otherwise, create a new slot.
@@ -124,7 +124,7 @@ impl<T, S: ?Sized> Arena<T, S> {
 
         self.header.keep_alive_slots.push(keep_alive.0.ptr());
 
-        (keep_alive, handle)
+        (handle, keep_alive)
     }
 
     pub fn remove_now(&mut self, handle: RawHandle) -> Option<T> {
@@ -178,6 +178,14 @@ impl<T, S: ?Sized> Arena<T, S> {
             .get_mut(handle.slot_idx as usize)
             .filter(|v| v.generation == handle.generation.get())
             .map(|v| unsafe { v.value.assume_init_mut() })
+    }
+
+    pub fn len(&self) -> u32 {
+        self.slots.len() as u32
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
     }
 }
 

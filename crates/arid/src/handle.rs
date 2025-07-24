@@ -29,7 +29,7 @@ mod rich_fmt {
     #[must_use]
     fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
         let was_inserted = REENTRANT_DEBUGS.with(|set| {
-            unsafe { &mut *set.get() }.insert((handle.raw_handle(), TypeId::of::<T::Object>()))
+            unsafe { &mut *set.get() }.insert((handle.raw(), TypeId::of::<T::Object>()))
         });
 
         if !was_inserted {
@@ -38,7 +38,7 @@ mod rich_fmt {
 
         Some(scopeguard::guard((), move |()| {
             REENTRANT_DEBUGS.with(|set| {
-                unsafe { &mut *set.get() }.remove(&(handle.raw_handle(), TypeId::of::<T::Object>()))
+                unsafe { &mut *set.get() }.remove(&(handle.raw(), TypeId::of::<T::Object>()))
             });
         }))
     }
@@ -46,7 +46,7 @@ mod rich_fmt {
     pub fn format_handle<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
         World::fetch_tls(|cx| {
             f.write_str(type_name::<T::Object>())?;
-            handle.raw_handle().fmt(f)?;
+            handle.raw().fmt(f)?;
 
             if let Some(cx) = cx
                 && let Some(_reentrancy_guard) = reentrant_debug_guard(handle)
@@ -83,7 +83,7 @@ impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
 
 pub trait ObjectArena: 'static + Default + fmt::Debug {
     type Object: Object<Handle = Self::Handle, Arena = Self>;
-    type Handle: Handle<Object = Self::Object, Arena = Self>;
+    type Handle: Handle<Object = Self::Object>;
 
     // === Accessors === //
 
@@ -131,37 +131,39 @@ impl<T: Object<Arena = Self>> ObjectArena for Arena<T, World> {
     fn insert(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (arena, manager) = Self::arena_and_manager_mut(w);
 
-        let (keep_alive, handle) = arena.insert(manager, Self::despawn_raw, value);
+        let (handle, keep_alive) = arena.insert(manager, Self::despawn_raw, value);
 
         Strong::new(Self::Handle::wrap(handle), keep_alive)
     }
 
     fn despawn(handle: Self::Handle, w: W) {
-        Self::arena_mut(w).remove_now(handle.raw_handle());
+        Self::arena_mut(w).remove_now(handle.raw());
     }
 
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        Self::arena(w).get(handle.raw_handle())
+        Self::arena(w).get(handle.raw())
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        Self::arena_mut(w).get_mut(handle.raw_handle())
+        Self::arena_mut(w).get_mut(handle.raw())
     }
 
     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
         Self::arena(w)
-            .upgrade(w.inner.get::<ArenaManager<World>>(), handle.raw_handle())
+            .upgrade(w.inner.get::<ArenaManager<World>>(), handle.raw())
             .map(|keep_alive| Strong::new(handle, keep_alive))
     }
 }
 
 // === Traits === //
 
+pub type ArenaForHandle<H> = <<H as Handle>::Object as Object>::Arena;
+
 pub trait Object:
     'static + Sized + fmt::Debug + LateField<world_ns::WorldNs, Value = Self::Arena>
 {
     type Arena: ObjectArena<Object = Self, Handle = Self::Handle>;
-    type Handle: Handle<Arena = Self::Arena, Object = Self>;
+    type Handle: Handle<Object = Self>;
 
     #[must_use]
     fn spawn(self, w: W) -> Strong<Self::Handle> {
@@ -181,23 +183,22 @@ pub trait Handle:
     + Ord
     + TransparentWrapper<RawHandle>
 {
-    type Arena: ObjectArena<Object = Self::Object, Handle = Self>;
-    type Object: Object<Arena = Self::Arena, Handle = Self>;
+    type Object: Object<Handle = Self>;
 
     fn wrap_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
     }
 
-    fn raw_handle(self) -> RawHandle {
+    fn raw(self) -> RawHandle {
         TransparentWrapper::peel(self)
     }
 
     fn try_get(self, w: Wr) -> Option<&Self::Object> {
-        Self::Arena::try_get(self, w)
+        ArenaForHandle::<Self>::try_get(self, w)
     }
 
     fn try_get_mut(self, w: W) -> Option<&mut Self::Object> {
-        Self::Arena::try_get_mut(self, w)
+        ArenaForHandle::<Self>::try_get_mut(self, w)
     }
 
     #[track_caller]
@@ -232,7 +233,7 @@ pub trait Handle:
 
     #[track_caller]
     fn as_strong_if_alive(self, w: Wr) -> Option<Strong<Self>> {
-        Self::Arena::as_strong_if_alive(self, w)
+        ArenaForHandle::<Self>::as_strong_if_alive(self, w)
     }
 
     #[track_caller]
@@ -326,7 +327,6 @@ macro_rules! object {
             }
 
             impl $crate::object_internals::Handle for [<$ty Handle>] {
-                type Arena = $crate::object_internals::CustomArenaOrDefault<$ty, $($arena)?>;
                 type Object = $ty;
             }
         }

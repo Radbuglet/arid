@@ -20,7 +20,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         let mut arena_mgr = ArenaManager::<()>::new();
         let mut arena = Arena::new();
 
-        let (_keep_alive, handle) = arena.insert(&mut arena_mgr, |_rh, _w| {}, 0u32);
+        let (handle, _keep_alive) = arena.insert(&mut arena_mgr, |_rh, _w| {}, 0u32);
 
         b.iter(|| {
             *arena.get_mut(handle).unwrap() += 1;
@@ -31,7 +31,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         let mut arena_mgr = ArenaManager::<()>::new();
         let mut arena = Arena::new();
 
-        let (_keep_alive, handle) = arena.insert(&mut arena_mgr, |_rh, _w| {}, 0u32);
+        let (handle, _keep_alive) = arena.insert(&mut arena_mgr, |_rh, _w| {}, 0u32);
 
         b.iter(|| {
             *arena.get_mut(handle).unwrap() += 1;
@@ -52,7 +52,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         let mut world = LateInstance::<Ns>::new();
 
         let (arena, arena_mgr) = world.get_two::<Arena<u32, ()>, ArenaManager<()>>();
-        let (_keep_alive, handle) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
+        let (handle, _keep_alive) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
 
         b.iter(|| {
             *world.get_mut::<Arena<u32, ()>>().get_mut(handle).unwrap() += 1;
@@ -72,7 +72,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         let mut world = LateInstance::<Ns>::new();
 
         let (arena, arena_mgr) = world.get_two::<Arena<u32, ()>, ArenaManager<()>>();
-        let (_keep_alive, handle) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
+        let (handle, _keep_alive) = arena.insert(arena_mgr, |_rh, _w| {}, 0u32);
 
         b.iter(|| {
             *world.get_mut::<Arena<u32, ()>>().get_mut(handle).unwrap() += 1;
