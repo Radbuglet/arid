@@ -7,7 +7,7 @@ use std::{
 
 use derive_where::derive_where;
 
-use crate::{Handle, KeepAlive, RawHandle, Wr};
+use crate::{Handle, KeepAlive, RawHandle, WorldDebug, Wr};
 
 // === Strong === //
 
@@ -150,7 +150,7 @@ pub struct Erased<T: ?Sized + ErasedHandle> {
 
 impl<T: ?Sized + ErasedHandle> fmt::Debug for Erased<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.handle.fmt(f)
+        (**self).fmt(f)
     }
 }
 
@@ -193,6 +193,10 @@ impl<T: ?Sized + ErasedHandle> Erased<T> {
             ),
         }
     }
+
+    pub fn debug(self, w: Wr<'_>) -> WorldDebug<'_, Erased<T>> {
+        WorldDebug::new(self, w)
+    }
 }
 
 impl<T: ?Sized + ErasedHandle> Deref for Erased<T> {
@@ -227,7 +231,7 @@ pub struct StrongErased<T: ?Sized + ErasedHandle> {
 
 impl<T: ?Sized + ErasedHandle> fmt::Debug for StrongErased<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.handle.fmt(f)
+        (**self).fmt(f)
     }
 }
 
@@ -300,6 +304,10 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     #[track_caller]
     pub fn downcast_ref<V: Handle>(&self) -> V {
         self.downgrade().downcast::<V>()
+    }
+
+    pub fn debug<'w>(&self, w: Wr<'w>) -> WorldDebug<'w, Erased<T>> {
+        WorldDebug::new(self.downgrade(), w)
     }
 }
 

@@ -43,4 +43,27 @@ impl World {
     pub fn fetch_tls<R>(f: impl FnOnce(Option<&World>) -> R) -> R {
         f(WORLD_TLS.get().map(|v| unsafe { v.as_ref() }))
     }
+
+    pub fn debug<T>(&self, value: T) -> WorldDebug<'_, T> {
+        WorldDebug::new(value, self)
+    }
+}
+
+// Not `#[must_use]` because these are often printed using `dbg!()`.
+#[derive(Copy, Clone)]
+pub struct WorldDebug<'a, T> {
+    world: &'a World,
+    value: T,
+}
+
+impl<'a, T> WorldDebug<'a, T> {
+    pub fn new(value: T, w: Wr<'a>) -> Self {
+        Self { value, world: w }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for WorldDebug<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.world.provide_tls(|| self.value.fmt(f))
+    }
 }

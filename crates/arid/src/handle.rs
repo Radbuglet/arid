@@ -4,10 +4,12 @@ use std::{
 };
 
 use bytemuck::TransparentWrapper;
-use derive_where::derive_where;
 use late_struct::LateField;
 
-use crate::{Arena, ArenaManager, ArenaManagerWrapper, RawHandle, Strong, W, World, Wr, world_ns};
+use crate::{
+    Arena, ArenaManager, ArenaManagerWrapper, ErasedHandle, RawHandle, Strong, W, WorldDebug, Wr,
+    world_ns,
+};
 
 // === DebugHandle === //
 
@@ -61,18 +63,6 @@ mod rich_fmt {
 
             Ok(())
         })
-    }
-}
-
-#[derive_where(Copy, Clone)]
-pub struct DebugHandle<'a, T: Handle> {
-    pub world: &'a World,
-    pub handle: T,
-}
-
-impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.world.provide_tls(|| self.handle.fmt(f))
     }
 }
 
@@ -206,6 +196,7 @@ pub trait Handle:
     + Eq
     + hash::Hash
     + Ord
+    + ErasedHandle
     + TransparentWrapper<RawHandle>
 {
     type Object: Object<Handle = Self>;
@@ -280,12 +271,8 @@ pub trait Handle:
         }
     }
 
-    #[must_use]
-    fn debug(self, w: Wr) -> DebugHandle<'_, Self> {
-        DebugHandle {
-            world: w,
-            handle: self,
-        }
+    fn debug(self, w: Wr) -> WorldDebug<'_, Self> {
+        WorldDebug::new(self, w)
     }
 }
 
