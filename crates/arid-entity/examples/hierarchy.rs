@@ -6,13 +6,18 @@ fn main() {
     let w = &mut w;
 
     let whee = EntityHandle::new(w)
+        .with_label("whee", w)
         .with(Collider { whee: 0 }.spawn(w), w)
         .with_child(
-            EntityHandle::new(w).with(Collider { whee: 2 }.spawn(w), w),
+            EntityHandle::new(w)
+                .with_label("woo", w)
+                .with(Collider { whee: 2 }.spawn(w), w),
             w,
         )
         .with_child(
-            EntityHandle::new(w).with(Collider { whee: 4 }.spawn(w), w),
+            EntityHandle::new(w)
+                .with_label("waz", w)
+                .with(Collider { whee: 4 }.spawn(w), w),
             w,
         );
 
@@ -22,6 +27,8 @@ fn main() {
     dbg!(whee.debug(w));
 
     let child = *whee.children(w)[0];
+
+    eprintln!("{:?}", whee.debug(w));
 
     drop(whee);
     dbg!(child.debug(w));

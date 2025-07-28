@@ -121,6 +121,15 @@ impl EntityHandle {
 
     pub fn with_child(self, child: EntityHandle, w: W) -> EntityHandle {
         child.set_parent(Some(self), w);
+        self
+    }
+
+    pub fn with_label(self, label: impl Into<String>, w: W) -> EntityHandle {
+        if let Some(existing) = self.try_get::<DebugLabelHandle>(w) {
+            existing.m(w).0 = label.into();
+        } else {
+            self.add(DebugLabel(label.into()).spawn(w), w);
+        }
 
         self
     }
@@ -241,12 +250,41 @@ impl ObjectArena for EntityArena {
             return f.write_str("<dangling>");
         }
 
-        let mut f = f.debug_map();
-
         let arch = handle.r(w).archetype;
         let arch_set = Self::arena(w).archetypes.component_set(arch);
 
+        if !f.alternate() {
+            let mut f = f.debug_tuple("");
+
+            if arch_set.contains(&ComponentId::of::<DebugLabel>()) {
+                f.field(&handle.get::<DebugLabelHandle>(w).r(w).0);
+            }
+
+            for comp in arch_set.iter() {
+                if (comp.type_id)() == TypeId::of::<DebugLabel>() {
+                    continue;
+                }
+
+                f.field(&format_args!("{}", (comp.type_name)()));
+            }
+
+            return f.finish();
+        }
+
+        let mut f = f.debug_map();
+
+        if arch_set.contains(&ComponentId::of::<DebugLabel>()) {
+            f.entry(
+                &format_args!("<name>"),
+                &handle.get::<DebugLabelHandle>(w).r(w).0,
+            );
+        }
+
         for comp in arch_set.iter() {
+            if (comp.type_id)() == TypeId::of::<DebugLabel>() {
+                continue;
+            }
+
             f.entry(
                 &format_args!("{}", (comp.type_name)()),
                 (comp.get_debug)(handle, w),
@@ -386,6 +424,13 @@ impl<T: Object<Arena = Self>> ObjectArena for ComponentArena<T> {
             .map(Self::Handle::from_raw)
     }
 }
+
+// === DebugLabel === //
+
+#[derive(Debug)]
+pub struct DebugLabel(pub String);
+
+object!(DebugLabel[ComponentArena<Self>]);
 
 // === ComponentInfo === //
 
