@@ -1,4 +1,7 @@
-use std::{fmt, hash};
+use std::{
+    fmt::{self, Debug},
+    hash,
+};
 
 use bytemuck::TransparentWrapper;
 use derive_where::derive_where;
@@ -17,7 +20,7 @@ mod rich_fmt {
 
     use rustc_hash::{FxBuildHasher, FxHashSet};
 
-    use crate::{RawHandle, World};
+    use crate::{ArenaForHandle, ObjectArena as _, RawHandle, World};
 
     use super::Handle;
 
@@ -53,11 +56,7 @@ mod rich_fmt {
             {
                 f.write_str(": ")?;
 
-                if let Some(alive) = handle.try_get(cx) {
-                    alive.fmt(f)?;
-                } else {
-                    f.write_str("<dangling>")?;
-                }
+                ArenaForHandle::<T>::print_debug(f, handle, cx)?;
             }
 
             Ok(())
@@ -80,6 +79,10 @@ impl<T: Handle> fmt::Debug for DebugHandle<'_, T> {
 }
 
 // === Meta === //
+
+pub trait ObjectArenaSimpleSpawn: ObjectArena {
+    fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle>;
+}
 
 pub trait ObjectArena: 'static + Default + fmt::Debug {
     type Object: Object<Handle = Self::Handle, Arena = Self>;
@@ -111,8 +114,6 @@ pub trait ObjectArena: 'static + Default + fmt::Debug {
 
     // === Hooks === //
 
-    fn insert(value: Self::Object, w: W) -> Strong<Self::Handle>;
-
     fn despawn(slot_idx: u32, w: W);
 
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object>;
@@ -122,19 +123,29 @@ pub trait ObjectArena: 'static + Default + fmt::Debug {
     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>>;
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle>;
+
+    fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+        if let Some(alive) = handle.try_get(w) {
+            alive.fmt(f)
+        } else {
+            f.write_str("<dangling>")
+        }
+    }
 }
 
-impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
-    type Object = T;
-    type Handle = T::Handle;
-
-    fn insert(value: Self::Object, w: W) -> Strong<Self::Handle> {
+impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for Arena<T> {
+    fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (arena, manager) = Self::arena_and_manager_mut(w);
 
         let (handle, keep_alive) = arena.insert(manager, Self::despawn, value);
 
         Strong::new(Self::Handle::wrap(handle), keep_alive)
     }
+}
+
+impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
+    type Object = T;
+    type Handle = T::Handle;
 
     fn despawn(slot_idx: u32, w: W) {
         Self::arena_mut(w).remove_now(slot_idx);
@@ -172,8 +183,11 @@ pub trait Object:
     type Handle: Handle<Object = Self>;
 
     #[must_use]
-    fn spawn(self, w: W) -> Strong<Self::Handle> {
-        Self::Arena::insert(self, w)
+    fn spawn(self, w: W) -> Strong<Self::Handle>
+    where
+        Self::Arena: ObjectArenaSimpleSpawn,
+    {
+        Self::Arena::spawn(self, w)
     }
 }
 

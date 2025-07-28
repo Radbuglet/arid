@@ -1,3 +1,5 @@
-#![allow(clippy::missing_safety_doc)]
+mod entity;
+pub use self::entity::*;
 
-pub mod entity;
+mod archetype;
+mod utils;

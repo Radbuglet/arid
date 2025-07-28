@@ -1,8 +1,6 @@
 use std::{cell::Cell, fmt, ptr::NonNull};
 
-use late_struct::{LateInstance, late_field, late_struct};
-
-use crate::ArenaManagerWrapper;
+use late_struct::{LateInstance, late_struct};
 
 thread_local! {
     static WORLD_TLS: Cell<Option<NonNull<World>>> = const { Cell::new(None) };
@@ -23,8 +21,6 @@ pub(crate) mod world_ns {
 
 late_struct!(world_ns::WorldNs);
 
-late_field!(ArenaManagerWrapper[world_ns::WorldNs]);
-
 impl fmt::Debug for World {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("World").finish_non_exhaustive()
@@ -34,17 +30,6 @@ impl fmt::Debug for World {
 impl World {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn flush(&mut self) {
-        while let Some(condemned) = self
-            .inner
-            .get_mut::<ArenaManagerWrapper>()
-            .0
-            .take_condemned()
-        {
-            condemned.process(self);
-        }
     }
 
     pub fn provide_tls<R>(&self, f: impl FnOnce() -> R) -> R {

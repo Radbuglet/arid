@@ -6,17 +6,34 @@ use std::{
 };
 
 use derive_where::derive_where;
+use late_struct::late_field;
 
 use crate::{
-    W,
+    W, World,
     utils::keep_alive::{KeepAliveList, KeepAlivePtr, KeepAliveStrong},
+    world_ns,
 };
 
-// === Arena === //
+// === ArenaManager === //
 
+// Used in `crate::handle`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct ArenaManagerWrapper(pub(crate) ArenaManager);
+
+#[derive(Debug)]
+pub struct ArenaManager {
+    uid: NonZeroU64,
+    listener: KeepAliveList<KeepAliveSlot>,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct KeepAliveSlot {
+    slot_idx: u32,
+    destructor: fn(slot_idx: u32, w: W),
+}
+
+late_field!(ArenaManagerWrapper[world_ns::WorldNs]);
 
 impl Default for ArenaManagerWrapper {
     fn default() -> Self {
@@ -29,30 +46,21 @@ impl Default for ArenaManagerWrapper {
     }
 }
 
-#[derive(Debug)]
-pub struct ArenaManager {
-    uid: NonZeroU64,
-    listener: KeepAliveList<KeepAliveSlot>,
-}
-
-impl ArenaManager {
-    // Used in `crate::world`.
-    pub(crate) fn take_condemned(&mut self) -> Option<KeepAliveSlot> {
-        self.listener.take_condemned().map(|v| v.1)
+impl World {
+    pub fn flush(&mut self) {
+        while let Some((_ptr, condemned)) = self
+            .inner
+            .get_mut::<ArenaManagerWrapper>()
+            .0
+            .listener
+            .take_condemned()
+        {
+            (condemned.destructor)(condemned.slot_idx, self);
+        }
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct KeepAliveSlot {
-    pub slot_idx: u32,
-    pub destructor: fn(slot_idx: u32, w: W),
-}
-
-impl KeepAliveSlot {
-    pub fn process(self, w: W) {
-        (self.destructor)(self.slot_idx, w)
-    }
-}
+// === Arena === //
 
 #[derive_where(Default)]
 pub struct Arena<T> {
