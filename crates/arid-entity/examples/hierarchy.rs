@@ -34,6 +34,10 @@ fn main() {
         .unique(w)
         .invalidate(w);
 
+    for tra in whee.traits::<dyn TransformListener>(w) {
+        tra.get(w).invalidate(w);
+    }
+
     dbg!(whee.debug(w));
 
     drop(whee);

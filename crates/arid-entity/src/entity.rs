@@ -451,7 +451,7 @@ pub struct EntityTraits {
 }
 
 impl EntityTraits {
-    pub fn push<E>(&mut self, f: fn(EntityHandle, W) -> Erased<E>)
+    pub fn push<E>(&mut self, f: fn(EntityHandle, Wr) -> Erased<E>)
     where
         E: ?Sized + ErasedHandle,
     {
@@ -493,32 +493,53 @@ impl<E: ?Sized + ErasedHandle> fmt::Debug for EntityTraitIter<E> {
     }
 }
 
-impl<E: ?Sized + ErasedHandle> EntityTraitIter<E> {
-    pub fn next(&mut self, w: W) -> Option<Erased<E>> {
-        let item = *self.list.as_ref()?.get(self.index)?;
-        let item = unsafe { mem::transmute::<*const (), fn(EntityHandle, W) -> Erased<E>>(item) };
+impl<E: ?Sized + ErasedHandle> Iterator for EntityTraitIter<E> {
+    type Item = EntityTraitItem<E>;
 
-        Some(item(self.entity, w))
+    fn next(&mut self) -> Option<Self::Item> {
+        let to_erased = *self.list.as_ref()?.get(self.index)?;
+        let to_erased =
+            unsafe { mem::transmute::<*const (), fn(EntityHandle, Wr) -> Erased<E>>(to_erased) };
+
+        self.index += 1;
+
+        Some(EntityTraitItem {
+            entity: self.entity,
+            to_erased,
+        })
     }
 
-    pub fn try_unique(&mut self, w: W) -> Option<Erased<E>> {
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.list.as_ref().map_or(0, |v| v.len()) - self.index;
+        (len, Some(len))
+    }
+}
+
+impl<E: ?Sized + ErasedHandle> ExactSizeIterator for EntityTraitIter<E> {}
+
+impl<E: ?Sized + ErasedHandle> EntityTraitIter<E> {
+    pub fn try_unique(&mut self, w: Wr) -> Option<Erased<E>> {
         if self.len() != 1 {
             return None;
         }
 
-        Some(self.next(w).unwrap())
+        Some(self.next().unwrap().get(w))
     }
 
-    pub fn unique(&mut self, w: W) -> Erased<E> {
+    pub fn unique(&mut self, w: Wr) -> Erased<E> {
         self.try_unique(w).unwrap()
     }
+}
 
-    pub fn len(&self) -> usize {
-        self.list.as_ref().map_or(0, |v| v.len()) - self.index
-    }
+#[derive_where(Debug, Copy, Clone)]
+pub struct EntityTraitItem<E: ?Sized + ErasedHandle> {
+    entity: EntityHandle,
+    to_erased: fn(EntityHandle, Wr) -> Erased<E>,
+}
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+impl<E: ?Sized + ErasedHandle> EntityTraitItem<E> {
+    pub fn get(self, w: Wr) -> Erased<E> {
+        (self.to_erased)(self.entity, w)
     }
 }
 
