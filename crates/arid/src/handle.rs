@@ -64,8 +64,6 @@ mod rich_fmt {
     }
 }
 
-pub use self::rich_fmt::*;
-
 #[derive_where(Copy, Clone)]
 pub struct DebugHandle<'a, T: Handle> {
     pub world: &'a World,
@@ -289,7 +287,8 @@ pub mod object_internals {
     use std::marker::PhantomData;
 
     pub use {
-        crate::{Arena, Handle, Object, ObjectArena, RawHandle, format_handle, world_ns::WorldNs},
+        super::rich_fmt::format_handle,
+        crate::{Arena, Handle, Object, ObjectArena, RawHandle, world_ns::WorldNs},
         bytemuck::TransparentWrapper,
         late_struct::late_field,
         paste::paste,

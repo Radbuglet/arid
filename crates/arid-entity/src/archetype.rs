@@ -1,10 +1,10 @@
-use std::{cmp::Ordering, hash::Hash, ops::Range, rc::Rc};
+use std::{hash::Hash, ops::Range, rc::Rc};
 
 use hashbrown::hash_map::RawEntryMut;
 use index_vec::{IndexVec, define_index_type};
 
 use crate::{
-    NodeId,
+    ComponentId,
     utils::{FxBuildHasher, FxHashMap, FxHashSet, IterHashExt, MergeIter, RemoveIter},
 };
 
@@ -23,9 +23,9 @@ impl ArchetypeId {
 #[derive(Debug)]
 pub struct ArchetypeStore {
     arena: IndexVec<ArchetypeId, ArchetypeData>,
-    comp_buf: Vec<NodeId>,
+    comp_buf: Vec<ComponentId>,
     map: FxHashMap<ArchetypeKey, ArchetypeId>,
-    comp_arches: FxHashMap<NodeId, Vec<ArchetypeId>>,
+    comp_arches: FxHashMap<ComponentId, Vec<ArchetypeId>>,
 }
 
 #[derive(Debug)]
@@ -37,9 +37,9 @@ struct ArchetypeKey {
 #[derive(Debug)]
 struct ArchetypeData {
     comps: Range<usize>,
-    comp_map: Rc<FxHashSet<NodeId>>,
-    pos: FxHashMap<NodeId, ArchetypeId>,
-    neg: FxHashMap<NodeId, ArchetypeId>,
+    comp_map: Rc<FxHashSet<ComponentId>>,
+    pos: FxHashMap<ComponentId, ArchetypeId>,
+    neg: FxHashMap<ComponentId, ArchetypeId>,
 }
 
 impl Default for ArchetypeStore {
@@ -59,7 +59,7 @@ impl ArchetypeStore {
         });
 
         let mut map = FxHashMap::default();
-        let hash = FxBuildHasher::new().hash_one_iter([] as [NodeId; 0]);
+        let hash = FxBuildHasher::new().hash_one_iter([] as [ComponentId; 0]);
 
         let RawEntryMut::Vacant(entry) = map.raw_entry_mut().from_hash(hash, |_| unreachable!())
         else {
@@ -81,7 +81,7 @@ impl ArchetypeStore {
         }
     }
 
-    fn lookup<M: LookupMode>(&mut self, base: ArchetypeId, with: NodeId) -> ArchetypeId {
+    fn lookup<M: LookupMode>(&mut self, base: ArchetypeId, with: ComponentId) -> ArchetypeId {
         let base_data = &self.arena[base];
 
         // Attempt to find a cached extension/de-extension of an existing archetype.
@@ -89,7 +89,7 @@ impl ArchetypeStore {
             return shortcut;
         }
 
-        // Determine the set of nodes for which we're looking.
+        // Determine the set of components for which we're looking.
         let comps = M::comps(&self.comp_buf[base_data.comps.clone()], with);
         let hash = FxBuildHasher::new().hash_one_iter(comps.clone());
 
@@ -152,68 +152,15 @@ impl ArchetypeStore {
         new
     }
 
-    pub fn lookup_extend(&mut self, base: ArchetypeId, with: NodeId) -> ArchetypeId {
+    pub fn lookup_extend(&mut self, base: ArchetypeId, with: ComponentId) -> ArchetypeId {
         self.lookup::<ExtendLookupMode>(base, with)
     }
 
-    pub fn lookup_remove(&mut self, base: ArchetypeId, without: NodeId) -> ArchetypeId {
+    pub fn lookup_remove(&mut self, base: ArchetypeId, without: ComponentId) -> ArchetypeId {
         self.lookup::<RemoveLookupMode>(base, without)
     }
 
-    pub fn archetypes_with(&self, id: NodeId) -> &[ArchetypeId] {
-        self.comp_arches.get(&id).map_or(&[], |v| v)
-    }
-
-    pub fn archetypes_with_set(&self, ids: impl IntoIterator<Item = NodeId>) -> Vec<ArchetypeId> {
-        let mut arches = Vec::new();
-        let mut iters = ids
-            .into_iter()
-            .map(|comp| self.archetypes_with(comp).iter().copied().peekable())
-            .collect::<Vec<_>>();
-
-        if iters.is_empty() {
-            return Vec::new();
-        }
-
-        iters.sort_by_key(|v| v.len());
-
-        'build: while let Some(key) = iters[0].next() {
-            // See whether all node types have the keyed archetype.
-            for iter in &mut iters[1..] {
-                loop {
-                    match iter.peek() {
-                        Some(other) => match other.cmp(&key) {
-                            Ordering::Less => {
-                                // We need to catch up with the key iterator. Keep scanning.
-                                let _discard = iter.next();
-                            }
-                            Ordering::Equal => {
-                                // This node contains the archetype of interest.
-                                break;
-                            }
-                            Ordering::Greater => {
-                                // This node does not include the key archetype.
-                                continue 'build;
-                            }
-                        },
-                        None => break 'build,
-                    }
-                }
-            }
-
-            // If they do, add it.
-            arches.push(key);
-        }
-
-        arches
-    }
-
-    pub fn nodes(&self, id: ArchetypeId) -> &[NodeId] {
-        let comps = self.arena[id].comps.clone();
-        &self.comp_buf[comps]
-    }
-
-    pub fn node_set(&self, id: ArchetypeId) -> &Rc<FxHashSet<NodeId>> {
+    pub fn component_set(&self, id: ArchetypeId) -> &Rc<FxHashSet<ComponentId>> {
         &self.arena[id].comp_map
     }
 }
@@ -221,7 +168,7 @@ impl ArchetypeStore {
 trait LookupMode {
     const POLARITY: bool;
 
-    fn comps(base: &[NodeId], with: NodeId) -> impl Iterator<Item = NodeId> + Clone;
+    fn comps(base: &[ComponentId], with: ComponentId) -> impl Iterator<Item = ComponentId> + Clone;
 }
 
 struct ExtendLookupMode;
@@ -229,7 +176,7 @@ struct ExtendLookupMode;
 impl LookupMode for ExtendLookupMode {
     const POLARITY: bool = true;
 
-    fn comps(base: &[NodeId], with: NodeId) -> impl Iterator<Item = NodeId> + Clone {
+    fn comps(base: &[ComponentId], with: ComponentId) -> impl Iterator<Item = ComponentId> + Clone {
         MergeIter::new(base.iter().copied(), [with])
     }
 }
@@ -239,7 +186,7 @@ struct RemoveLookupMode;
 impl LookupMode for RemoveLookupMode {
     const POLARITY: bool = true;
 
-    fn comps(base: &[NodeId], with: NodeId) -> impl Iterator<Item = NodeId> + Clone {
+    fn comps(base: &[ComponentId], with: ComponentId) -> impl Iterator<Item = ComponentId> + Clone {
         RemoveIter::new(base.iter().copied(), [with])
     }
 }

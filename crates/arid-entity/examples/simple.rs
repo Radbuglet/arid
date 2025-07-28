@@ -1,10 +1,10 @@
 use arid::{Handle, Object, World, object};
-use arid_entity::{EntityHandle, NodeArena, NodeHandle};
+use arid_entity::{ComponentArena, ComponentHandle, EntityHandle};
 
 #[derive(Debug)]
 pub struct Pos(pub [f32; 2]);
 
-object!(Pos[NodeArena<Self>]);
+object!(Pos[ComponentArena<Self>]);
 
 fn main() {
     let mut w = World::new();

@@ -4,6 +4,7 @@ use std::{
     fmt,
     hash::Hash,
     ops::Deref,
+    rc::Rc,
 };
 
 use arid::{
@@ -20,6 +21,9 @@ use crate::archetype::{ArchetypeId, ArchetypeStore};
 #[derive(Debug)]
 pub struct Entity {
     archetype: ArchetypeId,
+    parent: Option<EntityHandle>,
+    children: Rc<Vec<Strong<EntityHandle>>>,
+    index_in_parent: usize,
 }
 
 object!(Entity[EntityArena]);
@@ -28,18 +32,50 @@ impl EntityHandle {
     pub fn new(w: W) -> Strong<Self> {
         Entity {
             archetype: ArchetypeId::EMPTY,
+            parent: None,
+            children: Rc::new(Vec::new()),
+            index_in_parent: 0,
         }
         .spawn(w)
     }
 
-    pub fn add<T: NodeHandle>(self, handle: Strong<T>, w: W) -> T {
+    pub fn parent(self, w: Wr) -> Option<EntityHandle> {
+        self.r(w).parent
+    }
+
+    pub fn set_parent(self, parent: Option<EntityHandle>, w: W) {
+        if self.r(w).parent == parent {
+            return;
+        }
+
+        if let Some(old_parent) = self.m(w).parent.take() {
+            let index = self.r(w).index_in_parent;
+
+            Rc::make_mut(&mut old_parent.m(w).children).swap_remove(index);
+
+            if let Some(moved) = old_parent.r(w).children.get(index) {
+                moved.m(w).index_in_parent = index;
+            }
+        }
+
+        if let Some(new_parent) = parent {
+            let me = self.as_strong(w);
+
+            self.m(w).index_in_parent = new_parent.r(w).children.len();
+            self.m(w).parent = Some(new_parent);
+
+            Rc::make_mut(&mut new_parent.m(w).children).push(me);
+        }
+    }
+
+    pub fn add<T: ComponentHandle>(self, handle: Strong<T>, w: W) -> T {
         handle.detach(w);
 
         let handle_ref = *handle;
 
         // Update annotation entry
         {
-            let state = NodeArena::<T::Object>::arena_mut(w);
+            let state = ComponentArena::<T::Object>::arena_mut(w);
 
             if let Some(moved) = state.entity_map.insert(self, handle) {
                 state.annotations[moved.raw().slot() as usize].entity = None;
@@ -52,21 +88,36 @@ impl EntityHandle {
         let old_arch = self.r(w).archetype;
         let new_arch = EntityArena::arena_mut(w)
             .archetypes
-            .lookup_extend(old_arch, NodeId::of::<T::Object>());
+            .lookup_extend(old_arch, ComponentId::of::<T::Object>());
 
         self.m(w).archetype = new_arch;
 
         handle_ref
     }
 
-    pub fn try_get<T: NodeHandle>(self, w: Wr) -> Option<T> {
-        NodeArena::<T::Object>::arena(w)
+    pub fn children(self, w: Wr<'_>) -> &Rc<Vec<Strong<EntityHandle>>> {
+        &self.r(w).children
+    }
+
+    pub fn with_child(self, child: EntityHandle, w: W) -> EntityHandle {
+        child.set_parent(Some(self), w);
+
+        self
+    }
+
+    pub fn with<T: ComponentHandle>(self, handle: Strong<T>, w: W) -> Self {
+        self.add(handle, w);
+        self
+    }
+
+    pub fn try_get<T: ComponentHandle>(self, w: Wr) -> Option<T> {
+        ComponentArena::<T::Object>::arena(w)
             .entity_map
             .get(&self)
             .map(|v| **v)
     }
 
-    pub fn get<T: NodeHandle>(self, w: Wr) -> T {
+    pub fn get<T: ComponentHandle>(self, w: Wr) -> T {
         self.try_get(w).unwrap_or_else(|| {
             panic!(
                 "entity {:?} does not have component of type `{}`",
@@ -112,7 +163,7 @@ impl ObjectArena for EntityArena {
             .unwrap()
             .archetype;
 
-        let comp_set = Self::arena(w).archetypes.node_set(arch).clone();
+        let comp_set = Self::arena(w).archetypes.component_set(arch).clone();
 
         for comp in comp_set.iter() {
             (comp.detach_during_delete)(entity, w);
@@ -142,38 +193,53 @@ impl ObjectArena for EntityArena {
     }
 
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+        if !handle.is_alive(w) {
+            return f.write_str("<dangling>");
+        }
+
         let mut f = f.debug_map();
 
         let arch = handle.r(w).archetype;
-        let arch_set = Self::arena(w).archetypes.node_set(arch);
+        let arch_set = Self::arena(w).archetypes.component_set(arch);
 
         for comp in arch_set.iter() {
-            f.entry(&(comp.type_name)(), (comp.get_debug)(handle, w));
+            f.entry(
+                &format_args!("{}", (comp.type_name)()),
+                (comp.get_debug)(handle, w),
+            );
+        }
+
+        for (i, child) in handle.children(w).clone().iter().enumerate() {
+            f.entry(&format_args!("<child {i}>"), child);
         }
 
         f.finish()
     }
 }
 
-// === Node === //
+// === Component === //
 
-pub trait Node: Object<Arena = NodeArena<Self>> {}
+pub trait Component: Object<Arena = ComponentArena<Self>> {}
 
-impl<T: Object<Arena = NodeArena<Self>>> Node for T {}
+impl<T: Object<Arena = ComponentArena<Self>>> Component for T {}
 
-pub trait NodeHandle: Handle<Object: Node> {
+pub trait ComponentHandle: Handle<Object: Component> {
     fn try_entity(self, w: Wr) -> Option<EntityHandle>;
 
     fn entity(self, w: Wr) -> EntityHandle;
 
+    fn try_sibling<V: ComponentHandle>(self, w: Wr) -> Option<V>;
+
+    fn sibling<V: ComponentHandle>(self, w: Wr) -> V;
+
     fn detach(self, w: W);
 }
 
-impl<T: Handle<Object: Node>> NodeHandle for T {
+impl<T: Handle<Object: Component>> ComponentHandle for T {
     fn try_entity(self, w: Wr) -> Option<EntityHandle> {
         assert!(self.is_alive(w));
 
-        NodeArena::<T::Object>::arena(w).annotations[self.raw().slot() as usize].entity
+        ComponentArena::<T::Object>::arena(w).annotations[self.raw().slot() as usize].entity
     }
 
     fn entity(self, w: Wr) -> EntityHandle {
@@ -189,7 +255,7 @@ impl<T: Handle<Object: Node>> NodeHandle for T {
         assert!(self.is_alive(w));
 
         // Update annotation entry
-        let state = NodeArena::<Self::Object>::arena_mut(w);
+        let state = ComponentArena::<Self::Object>::arena_mut(w);
 
         let entity = state.annotations[self.raw().slot() as usize].entity.take();
 
@@ -203,26 +269,34 @@ impl<T: Handle<Object: Node>> NodeHandle for T {
         let old_arch = entity.r(w).archetype;
         let new_arch = EntityArena::arena_mut(w)
             .archetypes
-            .lookup_remove(old_arch, NodeId::of::<Self::Object>());
+            .lookup_remove(old_arch, ComponentId::of::<Self::Object>());
 
         entity.m(w).archetype = new_arch;
+    }
+
+    fn try_sibling<V: ComponentHandle>(self, w: Wr) -> Option<V> {
+        self.try_entity(w).and_then(|v| v.try_get(w))
+    }
+
+    fn sibling<V: ComponentHandle>(self, w: Wr) -> V {
+        self.entity(w).get(w)
     }
 }
 
 #[derive(Debug)]
 #[derive_where(Default)]
-pub struct NodeArena<T: Object> {
+pub struct ComponentArena<T: Object> {
     arena: Arena<T>,
-    annotations: Vec<NodeSlot>,
+    annotations: Vec<ComponentSlot>,
     entity_map: FxHashMap<EntityHandle, Strong<T::Handle>>,
 }
 
 #[derive(Debug, Default)]
-struct NodeSlot {
+struct ComponentSlot {
     entity: Option<EntityHandle>,
 }
 
-impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for NodeArena<T> {
+impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for ComponentArena<T> {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (state, manager) = Self::arena_and_manager_mut(w);
 
@@ -230,13 +304,13 @@ impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for NodeArena<T> {
 
         state
             .annotations
-            .resize_with(state.arena.len() as usize, NodeSlot::default);
+            .resize_with(state.arena.len() as usize, ComponentSlot::default);
 
         Strong::new(T::Handle::from_raw(handle), keep_alive)
     }
 }
 
-impl<T: Object<Arena = Self>> ObjectArena for NodeArena<T> {
+impl<T: Object<Arena = Self>> ObjectArena for ComponentArena<T> {
     type Object = T;
     type Handle = T::Handle;
 
@@ -269,33 +343,35 @@ impl<T: Object<Arena = Self>> ObjectArena for NodeArena<T> {
     }
 }
 
-// === NodeInfo === //
+// === ComponentInfo === //
 
 #[derive(Copy, Clone)]
-pub(crate) struct NodeId(&'static NodeInfo);
+pub(crate) struct ComponentId(&'static ComponentInfo);
 
-impl fmt::Debug for NodeId {
+impl fmt::Debug for ComponentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("NodeId").field(&(self.type_name)()).finish()
+        f.debug_tuple("ComponentId")
+            .field(&(self.type_name)())
+            .finish()
     }
 }
 
-impl NodeId {
-    pub fn of<T: Node>() -> Self {
+impl ComponentId {
+    pub fn of<T: Component>() -> Self {
         struct Helper<T>(T);
 
-        impl<T: Node> Helper<T> {
-            const INFO: &'static NodeInfo = &NodeInfo {
+        impl<T: Component> Helper<T> {
+            const INFO: &'static ComponentInfo = &ComponentInfo {
                 type_id: TypeId::of::<T>,
                 type_name: type_name::<T>,
                 detach_during_delete: |entity, w| {
-                    let state = NodeArena::<T>::arena_mut(w);
+                    let state = ComponentArena::<T>::arena_mut(w);
 
                     let comp = state.entity_map.remove(&entity).unwrap();
 
                     state.annotations[comp.raw().slot() as usize].entity = None;
                 },
-                get_debug: |entity, w| NodeArena::<T>::arena(w).entity_map[&entity].r(w),
+                get_debug: |entity, w| ComponentArena::<T>::arena(w).entity_map[&entity].r(w),
             };
         }
 
@@ -303,42 +379,42 @@ impl NodeId {
     }
 }
 
-impl Deref for NodeId {
-    type Target = NodeInfo;
+impl Deref for ComponentId {
+    type Target = ComponentInfo;
 
     fn deref(&self) -> &Self::Target {
         self.0
     }
 }
 
-impl Hash for NodeId {
+impl Hash for ComponentId {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         (self.0.type_id)().hash(state);
     }
 }
 
-impl Eq for NodeId {}
+impl Eq for ComponentId {}
 
-impl PartialEq for NodeId {
+impl PartialEq for ComponentId {
     fn eq(&self, other: &Self) -> bool {
         (self.0.type_id)() == (other.0.type_id)()
     }
 }
 
-impl Ord for NodeId {
+impl Ord for ComponentId {
     fn cmp(&self, other: &Self) -> Ordering {
         (self.0.type_id)().cmp(&(other.0.type_id)())
     }
 }
 
-impl PartialOrd for NodeId {
+impl PartialOrd for ComponentId {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct NodeInfo {
+pub(crate) struct ComponentInfo {
     pub type_id: fn() -> TypeId,
     pub type_name: fn() -> &'static str,
     pub detach_during_delete: fn(EntityHandle, W),
