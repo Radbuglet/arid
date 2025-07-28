@@ -146,6 +146,9 @@ impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
     type Handle = T::Handle;
 
     fn despawn(slot_idx: u32, w: W) {
+        let handle = Self::try_from_slot(slot_idx, w).unwrap();
+        <T::Handle>::invoke_pre_destructor(handle, w);
+
         Self::arena_mut(w).remove_now(slot_idx);
     }
 
@@ -173,6 +176,10 @@ impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
 // === Traits === //
 
 pub type ArenaForHandle<H> = <<H as Handle>::Object as Object>::Arena;
+
+pub trait Destructor: Handle {
+    fn pre_destroy(self, w: W);
+}
 
 pub trait Object:
     'static + Sized + fmt::Debug + LateField<world_ns::WorldNs, Value = Self::Arena>
@@ -202,6 +209,8 @@ pub trait Handle:
     + TransparentWrapper<RawHandle>
 {
     type Object: Object<Handle = Self>;
+
+    fn invoke_pre_destructor(me: Self, w: W);
 
     fn from_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
@@ -284,11 +293,13 @@ pub trait Handle:
 
 #[doc(hidden)]
 pub mod object_internals {
-    use std::marker::PhantomData;
+    use std::{marker::PhantomData, ops::Deref};
+
+    use super::Destructor;
 
     pub use {
         super::rich_fmt::format_handle,
-        crate::{Arena, Handle, Object, ObjectArena, RawHandle, world_ns::WorldNs},
+        crate::{Arena, Handle, Object, ObjectArena, RawHandle, W, world_ns::WorldNs},
         bytemuck::TransparentWrapper,
         late_struct::late_field,
         paste::paste,
@@ -313,6 +324,43 @@ pub mod object_internals {
 
     pub type CustomArenaOrDefault<Value, CustomArena = Arena<Value>> =
         TakeSecond<Value, CustomArena>;
+
+    pub trait PreDestroyDispatchTrait {
+        fn exec_pre_destroy(&self, w: W);
+    }
+
+    pub struct PreDestroyDispatch<T>(PreDestroyDispatchInner<T>);
+
+    impl<T> PreDestroyDispatch<T> {
+        pub fn new(value: T) -> Self {
+            Self(PreDestroyDispatchInner(value))
+        }
+    }
+
+    impl<T> PreDestroyDispatchTrait for PreDestroyDispatch<T>
+    where
+        T: Destructor,
+    {
+        fn exec_pre_destroy(&self, w: W) {
+            (self.0).0.pre_destroy(w);
+        }
+    }
+
+    impl<T> Deref for PreDestroyDispatch<T> {
+        type Target = PreDestroyDispatchInner<T>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    pub struct PreDestroyDispatchInner<T>(T);
+
+    impl<T> PreDestroyDispatchTrait for PreDestroyDispatchInner<T> {
+        fn exec_pre_destroy(&self, w: W) {
+            _ = w;
+        }
+    }
 }
 
 #[macro_export]
@@ -355,6 +403,12 @@ macro_rules! object {
 
             impl $crate::object_internals::Handle for [<$ty Handle>] {
                 type Object = $ty;
+
+                fn invoke_pre_destructor(me: Self, w: $crate::object_internals::W) {
+                    use $crate::object_internals::PreDestroyDispatchTrait as _;
+
+                    $crate::object_internals::PreDestroyDispatch::new(me).exec_pre_destroy(w);
+                }
             }
         }
     )*};

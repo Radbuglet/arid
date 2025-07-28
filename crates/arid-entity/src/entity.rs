@@ -221,19 +221,21 @@ impl ObjectArena for EntityArena {
     type Object = Entity;
     type Handle = EntityHandle;
 
-    fn despawn(handle: u32, w: W) {
-        let entity = EntityHandle::wrap(Self::arena(w).arena.slot_to_handle(handle).unwrap());
+    fn despawn(slot_idx: u32, w: W) {
+        let handle = EntityHandle::wrap(Self::arena(w).arena.slot_to_handle(slot_idx).unwrap());
+
+        EntityHandle::invoke_pre_destructor(handle, w);
 
         let arch = Self::arena_mut(w)
             .arena
-            .remove_now(handle)
+            .remove_now(slot_idx)
             .unwrap()
             .archetype;
 
         let comp_set = Self::arena(w).archetypes.component_set(arch).clone();
 
         for comp in comp_set.iter() {
-            (comp.detach_during_delete)(entity, w);
+            (comp.detach_during_delete)(handle, w);
         }
     }
 
@@ -411,8 +413,11 @@ impl<T: Component> ObjectArena for ComponentArena<T> {
     type Handle = T::Handle;
 
     fn despawn(slot_idx: u32, w: W) {
-        T::Handle::from_slot(slot_idx, w).detach(w);
+        let handle = T::Handle::from_slot(slot_idx, w);
 
+        <T::Handle>::invoke_pre_destructor(handle, w);
+
+        handle.detach(w);
         drop(Self::arena_mut(w).arena.remove_now(slot_idx));
     }
 
