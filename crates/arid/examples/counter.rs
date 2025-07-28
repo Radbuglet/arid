@@ -7,7 +7,7 @@ pub struct MyNode {
     chain: Option<MyNodeHandle>,
 }
 
-object!(MyNode);
+object!(pub MyNode);
 
 impl MyNodeHandle {
     pub fn new(w: W) -> Strong<Self> {

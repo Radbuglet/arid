@@ -365,7 +365,7 @@ pub mod object_internals {
 
 #[macro_export]
 macro_rules! object {
-    ( $( $ty:ident $([$arena:ty])? ),*$(,)? ) => {$(
+    ( $( $vis:vis $ty:ident $([$arena:ty])? ),*$(,)? ) => {$(
         $crate::object_internals::paste! {
             #[derive(
                 $crate::object_internals::Copy,
@@ -377,7 +377,7 @@ macro_rules! object {
                 $crate::object_internals::PartialOrd,
             )]
             #[repr(transparent)]
-            pub struct [<$ty Handle>]($crate::object_internals::RawHandle);
+            $vis struct [<$ty Handle>]($crate::object_internals::RawHandle);
 
             unsafe impl
                 $crate::object_internals::TransparentWrapper<$crate::object_internals::RawHandle>

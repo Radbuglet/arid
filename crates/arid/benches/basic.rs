@@ -4,7 +4,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 #[derive(Debug)]
 pub struct Counter(u32);
 
-object!(Counter);
+object!(pub Counter);
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("repeated_addition/direct_access", |b| {

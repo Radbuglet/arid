@@ -44,7 +44,7 @@ pub struct ColliderRegistry {
     colliders: Vec<ColliderHandle>,
 }
 
-object!(ColliderRegistry);
+object!(pub ColliderRegistry);
 
 impl Destructor for ColliderRegistryHandle {
     fn pre_destroy(self, w: W) {
@@ -60,7 +60,7 @@ pub struct Collider {
     index_in_registry: usize,
 }
 
-object!(Collider);
+object!(pub Collider);
 
 impl ColliderHandle {
     pub fn attach(self, registry: ColliderRegistryHandle, w: W) {

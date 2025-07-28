@@ -55,7 +55,7 @@ pub struct Collider {
     whee: u32,
 }
 
-component!(Collider[dyn TransformListener]);
+component!(pub Collider[dyn TransformListener]);
 
 impl TransformListener for ColliderHandle {
     fn invalidate(&self, w: W) {

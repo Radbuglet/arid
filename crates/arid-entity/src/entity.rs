@@ -29,12 +29,12 @@ pub struct Entity {
     index_in_parent: usize,
 }
 
-object!(Entity[EntityArena]);
+object!(pub Entity[EntityArena]);
 
 #[derive(Debug)]
 pub struct DebugLabel(pub Cow<'static, str>);
 
-component!(DebugLabel);
+component!(pub DebugLabel);
 
 impl EntityHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -642,7 +642,7 @@ pub mod component_internals {
 macro_rules! component {
     (
         $(
-            $name:ident
+            $vis:vis $name:ident
             $([
                 $($erase_as:ty),*
                 $(,)?
@@ -650,7 +650,7 @@ macro_rules! component {
         ),*
         $(,)?
     ) => {$(
-        $crate::component_internals::object!($name[$crate::component_internals::ComponentArena<Self>]);
+        $crate::component_internals::object!($vis $name[$crate::component_internals::ComponentArena<Self>]);
 
         impl $crate::component_internals::EnumerateTraits for $name {
             fn enumerate_traits(collector: &mut $crate::component_internals::EntityTraits) {

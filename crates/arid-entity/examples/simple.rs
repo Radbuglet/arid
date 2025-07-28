@@ -4,7 +4,7 @@ use arid_entity::{ComponentHandle, EntityHandle, component};
 #[derive(Debug)]
 pub struct Pos(pub [f32; 2]);
 
-component!(Pos);
+component!(pub Pos);
 
 fn main() {
     let mut w = World::new();
