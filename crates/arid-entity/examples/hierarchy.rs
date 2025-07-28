@@ -1,5 +1,5 @@
-use arid::{ErasedHandle, Handle, Object, W, World, object};
-use arid_entity::{ComponentArena, EntityHandle};
+use arid::{ErasedHandle, Handle, Object, W, World};
+use arid_entity::{EntityHandle, component};
 
 fn main() {
     let mut w = World::new();
@@ -30,6 +30,12 @@ fn main() {
 
     eprintln!("{:?}", whee.debug(w));
 
+    whee.traits::<dyn TransformListener>(w)
+        .unique(w)
+        .invalidate(w);
+
+    dbg!(whee.debug(w));
+
     drop(whee);
     dbg!(child.debug(w));
     w.flush();
@@ -45,10 +51,10 @@ pub struct Collider {
     whee: u32,
 }
 
-object!(Collider[ComponentArena<Self>]);
+component!(Collider[dyn TransformListener]);
 
 impl TransformListener for ColliderHandle {
     fn invalidate(&self, w: W) {
-        self.m(w).whee = 0xBAD;
+        self.m(w).whee = 42;
     }
 }

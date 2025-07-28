@@ -1,15 +1,18 @@
 use std::{
     any::{TypeId, type_name},
+    borrow::Cow,
     cmp::Ordering,
     fmt,
     hash::Hash,
+    marker::PhantomData,
+    mem,
     ops::Deref,
     rc::Rc,
 };
 
 use arid::{
-    Arena, Handle, Object, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, Wr, object,
-    object_internals::TransparentWrapper,
+    Arena, Erased, ErasedHandle, Handle, Object, ObjectArena, ObjectArenaSimpleSpawn, Strong, W,
+    Wr, object, object_internals::TransparentWrapper,
 };
 use derive_where::derive_where;
 use rustc_hash::FxHashMap;
@@ -27,6 +30,11 @@ pub struct Entity {
 }
 
 object!(Entity[EntityArena]);
+
+#[derive(Debug)]
+pub struct DebugLabel(pub Cow<'static, str>);
+
+component!(DebugLabel);
 
 impl EntityHandle {
     pub fn new(w: W) -> Strong<Self> {
@@ -124,7 +132,7 @@ impl EntityHandle {
         self
     }
 
-    pub fn with_label(self, label: impl Into<String>, w: W) -> EntityHandle {
+    pub fn with_label(self, label: impl Into<Cow<'static, str>>, w: W) -> EntityHandle {
         if let Some(existing) = self.try_get::<DebugLabelHandle>(w) {
             existing.m(w).0 = label.into();
         } else {
@@ -178,6 +186,12 @@ impl EntityHandle {
                 type_name::<T::Object>(),
             )
         })
+    }
+
+    pub fn traits<E: ?Sized + ErasedHandle>(self, w: Wr) -> EntityTraitIter<E> {
+        let arch = self.r(w).archetype;
+
+        EntityArena::arena(w).archetypes.traits(arch).iter(self)
     }
 }
 
@@ -301,9 +315,9 @@ impl ObjectArena for EntityArena {
 
 // === Component === //
 
-pub trait Component: Object<Arena = ComponentArena<Self>> {}
+pub trait Component: Object<Arena = ComponentArena<Self>> + EnumerateTraits {}
 
-impl<T: Object<Arena = ComponentArena<Self>>> Component for T {}
+impl<T> Component for T where T: Object<Arena = ComponentArena<Self>> + EnumerateTraits {}
 
 pub trait ComponentHandle: Handle<Object: Component> {
     fn try_entity(self, w: Wr) -> Option<EntityHandle>;
@@ -378,7 +392,7 @@ struct ComponentSlot {
     entity: Option<EntityHandle>,
 }
 
-impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for ComponentArena<T> {
+impl<T: Component> ObjectArenaSimpleSpawn for ComponentArena<T> {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (state, manager) = Self::arena_and_manager_mut(w);
 
@@ -392,7 +406,7 @@ impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for ComponentArena<T> {
     }
 }
 
-impl<T: Object<Arena = Self>> ObjectArena for ComponentArena<T> {
+impl<T: Component> ObjectArena for ComponentArena<T> {
     type Object = T;
     type Handle = T::Handle;
 
@@ -425,12 +439,88 @@ impl<T: Object<Arena = Self>> ObjectArena for ComponentArena<T> {
     }
 }
 
-// === DebugLabel === //
+// === EnumerateTraits === //
 
-#[derive(Debug)]
-pub struct DebugLabel(pub String);
+pub trait EnumerateTraits: Object {
+    fn enumerate_traits(collector: &mut EntityTraits);
+}
 
-object!(DebugLabel[ComponentArena<Self>]);
+#[derive(Debug, Default)]
+pub struct EntityTraits {
+    traits: FxHashMap<TypeId, Rc<Vec<*const ()>>>,
+}
+
+impl EntityTraits {
+    pub fn push<E>(&mut self, f: fn(EntityHandle, W) -> Erased<E>)
+    where
+        E: ?Sized + ErasedHandle,
+    {
+        Rc::make_mut(self.traits.entry(TypeId::of::<E>()).or_default()).push(f as *const ());
+    }
+
+    pub fn iter<E>(&self, entity: EntityHandle) -> EntityTraitIter<E>
+    where
+        E: ?Sized + ErasedHandle,
+    {
+        match self.traits.get(&TypeId::of::<E>()) {
+            Some(list) => EntityTraitIter {
+                _ty: PhantomData,
+                entity,
+                list: Some(list.clone()),
+                index: 0,
+            },
+            None => EntityTraitIter {
+                _ty: PhantomData,
+                entity,
+                list: None,
+                index: 0,
+            },
+        }
+    }
+}
+
+#[derive_where(Clone)]
+pub struct EntityTraitIter<E: ?Sized + ErasedHandle> {
+    _ty: PhantomData<fn(E) -> E>,
+    entity: EntityHandle,
+    list: Option<Rc<Vec<*const ()>>>,
+    index: usize,
+}
+
+impl<E: ?Sized + ErasedHandle> fmt::Debug for EntityTraitIter<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EntityTraits").finish_non_exhaustive()
+    }
+}
+
+impl<E: ?Sized + ErasedHandle> EntityTraitIter<E> {
+    pub fn next(&mut self, w: W) -> Option<Erased<E>> {
+        let item = *self.list.as_ref()?.get(self.index)?;
+        let item = unsafe { mem::transmute::<*const (), fn(EntityHandle, W) -> Erased<E>>(item) };
+
+        Some(item(self.entity, w))
+    }
+
+    pub fn try_unique(&mut self, w: W) -> Option<Erased<E>> {
+        if self.len() != 1 {
+            return None;
+        }
+
+        Some(self.next(w).unwrap())
+    }
+
+    pub fn unique(&mut self, w: W) -> Erased<E> {
+        self.try_unique(w).unwrap()
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.as_ref().map_or(0, |v| v.len()) - self.index
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 // === ComponentInfo === //
 
@@ -461,6 +551,7 @@ impl ComponentId {
                     state.annotations[comp.raw().slot() as usize].entity = None;
                 },
                 get_debug: |entity, w| ComponentArena::<T>::arena(w).entity_map[&entity].r(w),
+                enumerate_traits: T::enumerate_traits,
             };
         }
 
@@ -508,4 +599,47 @@ pub(crate) struct ComponentInfo {
     pub type_name: fn() -> &'static str,
     pub detach_during_delete: fn(EntityHandle, W),
     pub get_debug: fn(EntityHandle, Wr<'_>) -> &'_ dyn fmt::Debug,
+    pub enumerate_traits: fn(&mut EntityTraits),
 }
+
+// === Macro === //
+
+#[doc(hidden)]
+pub mod component_internals {
+    pub use {
+        super::{ComponentArena, EntityTraits, EnumerateTraits},
+        arid::{ErasedHandle, Object, erase, object},
+    };
+}
+
+#[macro_export]
+macro_rules! component {
+    (
+        $(
+            $name:ident
+            $([
+                $($erase_as:ty),*
+                $(,)?
+            ])?
+        ),*
+        $(,)?
+    ) => {$(
+        $crate::component_internals::object!($name[$crate::component_internals::ComponentArena<Self>]);
+
+        impl $crate::component_internals::EnumerateTraits for $name {
+            fn enumerate_traits(collector: &mut $crate::component_internals::EntityTraits) {
+                collector.push::<dyn $crate::component_internals::ErasedHandle>(|entity, w| {
+                    $crate::component_internals::erase!(entity.get::<<Self as $crate::component_internals::Object>::Handle>(w))
+                });
+
+                $($(
+                    collector.push::<$erase_as>(|entity, w| {
+                        $crate::component_internals::erase!(entity.get::<<Self as $crate::component_internals::Object>::Handle>(w))
+                    });
+                )*)?
+            }
+        }
+    )*};
+}
+
+pub use component;

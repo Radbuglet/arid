@@ -4,7 +4,7 @@ use hashbrown::hash_map::RawEntryMut;
 use index_vec::{IndexVec, define_index_type};
 
 use crate::{
-    ComponentId,
+    ComponentId, EntityTraits,
     utils::{FxBuildHasher, FxHashMap, FxHashSet, IterHashExt, MergeIter, RemoveIter},
 };
 
@@ -37,7 +37,8 @@ struct ArchetypeKey {
 #[derive(Debug)]
 struct ArchetypeData {
     comps: Range<usize>,
-    comp_map: Rc<FxHashSet<ComponentId>>,
+    comp_set: Rc<FxHashSet<ComponentId>>,
+    traits: EntityTraits,
     pos: FxHashMap<ComponentId, ArchetypeId>,
     neg: FxHashMap<ComponentId, ArchetypeId>,
 }
@@ -53,7 +54,8 @@ impl ArchetypeStore {
         let mut arena = IndexVec::new();
         arena.push(ArchetypeData {
             comps: 0..0,
-            comp_map: Rc::default(),
+            comp_set: Rc::default(),
+            traits: EntityTraits::default(),
             pos: FxHashMap::default(),
             neg: FxHashMap::default(),
         });
@@ -125,10 +127,17 @@ impl ArchetypeStore {
         self.comp_buf.extend(comps_vec.iter().copied());
         let comps = range_start..self.comp_buf.len();
 
+        let mut traits = EntityTraits::default();
+
+        for &id in &comps_vec {
+            (id.enumerate_traits)(&mut traits);
+        }
+
         // Create the `new` archetype with an appropriate back-ref to its original archetype.
         let mut new_data = ArchetypeData {
             comps: comps.clone(),
-            comp_map: Rc::new(comps_vec.iter().copied().collect()),
+            comp_set: Rc::new(comps_vec.iter().copied().collect()),
+            traits,
             pos: FxHashMap::default(),
             neg: FxHashMap::default(),
         };
@@ -161,7 +170,11 @@ impl ArchetypeStore {
     }
 
     pub fn component_set(&self, id: ArchetypeId) -> &Rc<FxHashSet<ComponentId>> {
-        &self.arena[id].comp_map
+        &self.arena[id].comp_set
+    }
+
+    pub fn traits(&self, id: ArchetypeId) -> &EntityTraits {
+        &self.arena[id].traits
     }
 }
 
