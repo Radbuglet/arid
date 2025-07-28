@@ -59,6 +59,8 @@ impl EntityHandle {
         }
 
         if let Some(new_parent) = parent {
+            assert!(!self.is_ancestor_of(new_parent, w));
+
             let me = self.as_strong(w);
 
             self.m(w).index_in_parent = new_parent.r(w).children.len();
@@ -66,6 +68,24 @@ impl EntityHandle {
 
             Rc::make_mut(&mut new_parent.m(w).children).push(me);
         }
+    }
+
+    pub fn is_ancestor_of(self, other: EntityHandle, w: Wr) -> bool {
+        let mut iter = Some(other);
+
+        while let Some(curr) = iter {
+            if curr == self {
+                return true;
+            }
+
+            iter = curr.parent(w);
+        }
+
+        false
+    }
+
+    pub fn is_descendant_of(self, other: EntityHandle, w: Wr) -> bool {
+        other.is_ancestor_of(self, w)
     }
 
     pub fn add<T: ComponentHandle>(self, handle: Strong<T>, w: W) -> T {
@@ -121,6 +141,30 @@ impl EntityHandle {
         self.try_get(w).unwrap_or_else(|| {
             panic!(
                 "entity {:?} does not have component of type `{}`",
+                self.debug(w),
+                type_name::<T::Object>(),
+            )
+        })
+    }
+
+    pub fn try_deep_get<T: ComponentHandle>(self, w: Wr) -> Option<T> {
+        let mut iter = Some(self);
+
+        while let Some(curr) = iter {
+            if let Some(value) = curr.try_get(w) {
+                return Some(value);
+            }
+
+            iter = curr.parent(w)
+        }
+
+        None
+    }
+
+    pub fn deep_get<T: ComponentHandle>(self, w: Wr) -> T {
+        self.try_deep_get(w).unwrap_or_else(|| {
+            panic!(
+                "neither the entity {:?} nor its ancestors have a component of type `{}`",
                 self.debug(w),
                 type_name::<T::Object>(),
             )
@@ -251,6 +295,14 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
         })
     }
 
+    fn try_sibling<V: ComponentHandle>(self, w: Wr) -> Option<V> {
+        self.try_entity(w).and_then(|v| v.try_get(w))
+    }
+
+    fn sibling<V: ComponentHandle>(self, w: Wr) -> V {
+        self.entity(w).get(w)
+    }
+
     fn detach(self, w: W) {
         assert!(self.is_alive(w));
 
@@ -272,14 +324,6 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
             .lookup_remove(old_arch, ComponentId::of::<Self::Object>());
 
         entity.m(w).archetype = new_arch;
-    }
-
-    fn try_sibling<V: ComponentHandle>(self, w: Wr) -> Option<V> {
-        self.try_entity(w).and_then(|v| v.try_get(w))
-    }
-
-    fn sibling<V: ComponentHandle>(self, w: Wr) -> V {
-        self.entity(w).get(w)
     }
 }
 
