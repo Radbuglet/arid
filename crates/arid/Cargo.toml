@@ -1,6 +1,10 @@
 [package]
 name = "arid"
 version = "0.1.0"
+description = "An ergonomic object-model for Rust."
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/Radbuglet/arid"
 edition = "2024"
 
 [dependencies]

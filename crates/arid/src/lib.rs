@@ -669,7 +669,7 @@
 //! In addition to the [`ObjectArena`] trait we'll soon implement, this structure must also be
 //! [`Sized`], implement [`Debug`](std::fmt::Debug) and [`Default`], and live for `'static`.
 //!
-//! ```rust
+//! ```
 //! use arid::{Arena, Object};
 //!
 //! #[derive(Debug)]
@@ -787,7 +787,7 @@
 //!
 //! Finally, we can create extension traits to define new methods on objects within our new arena.
 //!
-//! ```rust
+//! ```
 //! # use arid::{Arena, Object};
 //! #
 //! # #[derive(Debug)]

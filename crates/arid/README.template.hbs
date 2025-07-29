@@ -1,0 +1,90 @@
+{{!-- Use the first package in the workspace defaults as the doc source. --}}
+{{var "package_name" workspace_default_members.[0]}}
+{{~#with (lookup packages (var "package_name"))~}}
+{{#if lib}}
+{{var "crate_name" lib.doc_name}}
+{{else}}
+{{var "crate_name" lib.doc_name}}
+{{/if}}
+# {{case (var "package_name") "Title Case"}}
+
+![Version](https://img.shields.io/static/v1?label=version&message={{version}}&color=informational)
+[![docs.rs](https://img.shields.io/docsrs/{{var "package_name"}})](https://docs.rs/{{var "package_name"}}/latest/{{var "crate_name"}}/)
+{{#if rust_version}}
+![Version](https://img.shields.io/static/v1?label=MSRV&message={{rust_version}}&color=informational)
+{{/if}}
+[![Crates.io License](https://img.shields.io/crates/l/{{var "package_name"}})](#license)
+[![Crates.io](https://img.shields.io/crates/v/{{var "package_name"}})](https://crates.io/crates/{{var "package_name"}})
+
+{{!-- Use the binary's docs if only one, or the default binary, or the library docs. --}}
+{{#headers 1}}
+{{#if (eq (len bins) 1)}}
+{{#each bins}}{{#if @first}}{{docs.doc.full}}{{/if}}{{/each}}
+{{else}}
+{{#if default_run}}
+{{#with (lookup bins default_run)}}
+{{docs.doc.full}}
+{{/with}}
+{{else}}
+{{lib.docs.doc.full}}
+{{/if}}
+{{/if}}
+{{/headers}}
+
+## Contributing
+
+Contributions in any form (issues, pull requests, etc.) to this project must adhere to 
+Rust's [Code of Conduct](https://www.rust-lang.org/policies/code-of-conduct).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for 
+inclusion in `{{var "package_name"}}` by you shall be licensed as below, without any 
+additional terms or conditions.
+
+## License
+
+{{#if license.Parsed}}
+This project is licensed under
+{{~#if (gt (len license.Parsed.requirements) 1)}}
+ either of
+
+{{#each license.Parsed.requirements}}
+{{#if Known}}
+  * [{{Known.full_name}}](LICENSE-{{Known.name}})
+{{else}}
+  * [{{Unknown.name}}](LICENSE-{{Unknown.name}}).
+{{/if}}
+{{/each}}
+
+at your option.
+{{else}}
+{{#each license.Parsed.requirements}}
+{{#if @first}}
+{{#if Known}}
+ the [{{Known.full_name}}](LICENSE).
+{{else}}
+ [{{Unknown.name}}](LICENSE).
+{{/if}}
+{{/if}}
+{{/each}}
+{{/if}}
+{{else}}
+{{#if license.Unknown.expression}}
+{{#if license.Unknown.file}}
+This project is licensed under [{{license.Unknown.expression}}]({{license.Unknown.file}}).
+{{else}}
+{{#if (eq license.Unknown.expression "UNLICENSED")}}
+All rights reserved.
+{{else}}
+This project is licensed under {{license.Unknown.expression}}.
+{{/if}}
+{{/if}}
+{{else}}
+{{#if license.Unknown.file}}
+This project is licensed under [this license]({{license.Unknown.file}}).
+{{else}}
+All rights reserved.
+{{/if}}
+{{/if}}
+{{/if}}
+
+{{~/with~}}
