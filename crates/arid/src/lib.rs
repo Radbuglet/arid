@@ -1037,9 +1037,29 @@
 //!
 //! Happy hacking!
 //!
-//! ## Limitations
+//! ## Limitations and Future Work
 //!
-//! TODO
+//! `arid`'s largest limitation is its lack of support for generic [`Object`] definitions. This
+//! limitation originates from our use of [`late_struct`] to build up our [`World`]s: each object
+//! declaration defines a new field in our world and these late-bound field definitions cannot be
+//! generic.
+//!
+//! Our use of `late_struct` also means that the size of each world is proportional to the number of
+//! objects defined in the binary but the constant factor on this size is, intentionally, fairly
+//! small (currently, 32 bytes per arena type).
+//!
+//! The use of arenas to implement this object model is also somewhat unfortunate. Arenas transform
+//! the (small) cost of incrementing and decrementing reference counts into the (equally small) cost
+//! of checking object generations before accessing a handle. This is a somewhat suspicious tradeoff
+//! since I'd expect dereferences to happen more often than reference copies but that's just a
+//! hunch.
+//!
+//! Really, arenas are just a work-around to give us `Copy`able handles for ergonomic purposes.
+//! Hopefully, this need for arenas will be obviated by the [ergonomic ref-counting] team's efforts.
+//! Likewise, the handle newtype system is really just a work-around for the lack of [arbitrary
+//! `Self` types](https://github.com/rust-lang/rust/issues/44874).
+//!
+//! [ergonomic ref-counting]: https://rust-lang.github.io/rust-project-goals/2024h2/ergonomic-rc.html
 //!
 
 mod utils;
