@@ -59,7 +59,7 @@
 //! }
 //! ```
 //!
-//! ## Motivation
+//! # Motivation
 //!
 //! The core idea behind `arid` is to tie all object borrows to some parent [`World`] instance. That
 //! is, we make each smart-pointer accessible by methods such as these...
@@ -118,7 +118,7 @@
 //! These three decisions placate the borrow checker for most usage patterns, making the system
 //! quite ergonomic compared to its more traditional alternatives.
 //!
-//! ## Basic Usage
+//! # Basic Usage
 //!
 //! All object instances in the `arid` object model are owned by exactly one [`World`]. It can be
 //! instantiated anywhere with...
@@ -408,7 +408,7 @@
 //! }
 //! ```
 //!
-//! ## Lifecycle
+//! # Lifecycle
 //!
 //! Objects in `arid` are reference-counted although their semantics are a bit special:
 //!
@@ -498,7 +498,7 @@
 //! w.flush();  // "Max has been destroyed!"
 //! ```
 //!
-//! ## Polymorphism
+//! # Polymorphism
 //!
 //! Handle newtypes are not limited to harboring inherent `impl` blocks. Indeed, they can also
 //! accommodate `dyn`-compatible `trait` implementations, providing a powerful mechanism for
@@ -656,7 +656,7 @@
 //! [`Erased`] is a weak-but-assumed-valid handle to a value—sort of like a `Handle`. You can use
 //! [`StrongErased`] to create a strong reference to the value.
 //!
-//! ## Custom Arenas
+//! # Custom Arenas
 //!
 //! `arid` allows us to define custom arenas to track a given object's instances, which can be
 //! useful when trying to attach additional metadata to a variety of objects (e.g. widget parent and
@@ -1037,7 +1037,7 @@
 //!
 //! Happy hacking!
 //!
-//! ## Limitations and Future Work
+//! # Limitations and Future Work
 //!
 //! `arid`'s largest limitation is its lack of support for generic [`Object`] definitions. This
 //! limitation originates from our use of [`late_struct`] to build up our [`World`]s: each object

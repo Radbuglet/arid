@@ -65,7 +65,7 @@ impl ListHandle {
 }
 ```
 
-### Motivation
+## Motivation
 
 The core idea behind `arid` is to tie all object borrows to some parent [`World`](https://docs.rs/arid/latest/arid/world/struct.World.html) instance. That
 is, we make each smart-pointer accessible by methods such as these...
@@ -117,7 +117,7 @@ this in three main ways:
 These three decisions placate the borrow checker for most usage patterns, making the system
 quite ergonomic compared to its more traditional alternatives.
 
-### Basic Usage
+## Basic Usage
 
 All object instances in the `arid` object model are owned by exactly one [`World`](https://docs.rs/arid/latest/arid/world/struct.World.html). It can be
 instantiated anywhere with...
@@ -305,7 +305,7 @@ dbg!(foo.debug(w));
 }
 ```
 
-### Lifecycle
+## Lifecycle
 
 Objects in `arid` are reference-counted although their semantics are a bit special:
 
@@ -377,7 +377,7 @@ drop(object);
 w.flush();  // "Max has been destroyed!"
 ```
 
-### Polymorphism
+## Polymorphism
 
 Handle newtypes are not limited to harboring inherent `impl` blocks. Indeed, they can also
 accommodate `dyn`-compatible `trait` implementations, providing a powerful mechanism for
@@ -478,7 +478,7 @@ assert!(counter.try_downcast::<ComplexCounterHandle>().is_some());
 [`Erased`](https://docs.rs/arid/latest/arid/wrappers/struct.Erased.html) is a weak-but-assumed-valid handle to a value—sort of like a `Handle`. You can use
 [`StrongErased`](https://docs.rs/arid/latest/arid/wrappers/struct.StrongErased.html) to create a strong reference to the value.
 
-### Custom Arenas
+## Custom Arenas
 
 `arid` allows us to define custom arenas to track a given object's instances, which can be
 useful when trying to attach additional metadata to a variety of objects (e.g. widget parent and
@@ -638,7 +638,7 @@ assert_eq!(my_thing.get_frobs(w), 1);
 
 Happy hacking\!
 
-### Limitations and Future Work
+## Limitations and Future Work
 
 `arid`'s largest limitation is its lack of support for generic [`Object`](https://docs.rs/arid/latest/arid/handle/trait.Object.html) definitions. This
 limitation originates from our use of `late_struct` to build up our [`World`](https://docs.rs/arid/latest/arid/world/struct.World.html)s: each object
