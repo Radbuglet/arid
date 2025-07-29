@@ -317,9 +317,9 @@ impl ObjectArena for EntityArena {
 
 // === Component === //
 
-pub trait Component: Object<Arena = ComponentArena<Self>> + EnumerateTraits {}
+pub trait Component: Object<Arena = ComponentArena<Self>> + EnumerateTraits + fmt::Debug {}
 
-impl<T> Component for T where T: Object<Arena = ComponentArena<Self>> + EnumerateTraits {}
+impl<T> Component for T where T: Object<Arena = ComponentArena<Self>> + EnumerateTraits + fmt::Debug {}
 
 pub trait ComponentHandle: Handle<Object: Component> {
     fn try_entity(self, w: Wr) -> Option<EntityHandle>;
@@ -441,6 +441,14 @@ impl<T: Component> ObjectArena for ComponentArena<T> {
             .arena
             .slot_to_handle(slot_idx)
             .map(Self::Handle::from_raw)
+    }
+
+    fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+        if let Some(alive) = handle.try_get(w) {
+            alive.fmt(f)
+        } else {
+            f.write_str("<dangling>")
+        }
     }
 }
 

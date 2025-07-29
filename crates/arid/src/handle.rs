@@ -1,7 +1,4 @@
-use std::{
-    fmt::{self, Debug},
-    hash,
-};
+use std::{fmt, hash};
 
 use bytemuck::TransparentWrapper;
 use late_struct::LateField;
@@ -112,26 +109,26 @@ pub trait ObjectArena: 'static + Default + fmt::Debug {
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle>;
 
-    fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-        if let Some(alive) = handle.try_get(w) {
-            alive.fmt(f)
-        } else {
-            f.write_str("<dangling>")
-        }
-    }
+    fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result;
 }
 
-impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for Arena<T> {
+impl<T> ObjectArenaSimpleSpawn for Arena<T>
+where
+    T: Object<Arena = Self> + fmt::Debug,
+{
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (arena, manager) = Self::arena_and_manager_mut(w);
 
         let (handle, keep_alive) = arena.insert(manager, Self::despawn, value);
 
-        Strong::new(Self::Handle::wrap(handle), keep_alive)
+        Strong::new(Self::Handle::from_raw(handle), keep_alive)
     }
 }
 
-impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
+impl<T: Object<Arena = Self>> ObjectArena for Arena<T>
+where
+    T: Object<Arena = Self> + fmt::Debug,
+{
     type Object = T;
     type Handle = T::Handle;
 
@@ -161,6 +158,14 @@ impl<T: Object<Arena = Self>> ObjectArena for Arena<T> {
             .slot_to_handle(slot_idx)
             .map(T::Handle::from_raw)
     }
+
+    fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+        if let Some(alive) = handle.try_get(w) {
+            alive.fmt(f)
+        } else {
+            f.write_str("<dangling>")
+        }
+    }
 }
 
 // === Traits === //
@@ -171,9 +176,7 @@ pub trait Destructor: Handle {
     fn pre_destroy(self, w: W);
 }
 
-pub trait Object:
-    'static + Sized + fmt::Debug + LateField<world_ns::WorldNs, Value = Self::Arena>
-{
+pub trait Object: 'static + Sized + LateField<world_ns::WorldNs, Value = Self::Arena> {
     type Arena: ObjectArena<Object = Self, Handle = Self::Handle>;
     type Handle: Handle<Object = Self>;
 

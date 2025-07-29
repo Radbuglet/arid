@@ -103,7 +103,7 @@
 //!    borrow checker violations which may otherwise crop up from our strict "single borrow at a
 //!    time" restriction.
 //!
-//! 2. Second, we allow smart pointers be to receivers on `impl` blocks.
+//! 2. Second, we allow smart pointers to be receivers on `impl` blocks.
 //!
 //!    This allows users to interweave multiple mutable borrows within a single method body while
 //!    still keeping a subject-verb-style calling syntax for object methods.
@@ -658,7 +658,384 @@
 //!
 //! ## Custom Arenas
 //!
-//! TODO
+//! `arid` allows us to define custom arenas to track a given object's instances, which can be
+//! useful when trying to attach additional metadata to a variety of objects (e.g. widget parent and
+//! child relationships in a UI framework) or when customizing those objects' deletion routine.
+//!
+//! To do this, we must first define a new arena structure and put a bare [`Arena`] into it. This is
+//! necessary since only `Arena`s can allocate the raw [`KeepAlive`] guards required to construct a
+//! [`Strong`] handle.
+//!
+//! In addition to the [`ObjectArena`] trait we'll soon implement, this structure must also be
+//! [`Sized`], implement [`Debug`](std::fmt::Debug) and [`Default`], and live for `'static`.
+//!
+//! ```rust
+//! use arid::{Arena, Object};
+//!
+//! #[derive(Debug)]
+//! pub struct MyArena<T: Object> {
+//!     arena: Arena<Slot<T>>,
+//! }
+//!
+//! impl<T: Object> Default for MyArena<T> {
+//!     fn default() -> Self {
+//!         Self {
+//!             arena: Arena::default(),
+//!         }
+//!     }
+//! }
+//!
+//! #[derive(Debug)]
+//! struct Slot<T: Object> {
+//!     value: T,
+//!     frobs: u32,
+//! }
+//! ```
+//!
+//! Now, let us implement the [`ObjectArena`] trait on the `MyArena` type for objects we wish to
+//! support. This trait provides the [`ObjectArena::arena`] and [`ObjectArena::arena_mut`]
+//! methods to gain access to the underlying arena instance for a given world and we're expected to
+//! define how operations such as spawning, deleting, and accessing elements should work. Here's
+//! some boilerplate for a minimal arena with very little customization:
+//!
+//! ```
+//! # use arid::{Arena, Object};
+//! #
+//! # #[derive(Debug)]
+//! # pub struct MyArena<T: Object> {
+//! #     arena: Arena<Slot<T>>,
+//! # }
+//! #
+//! # impl<T: Object> Default for MyArena<T> {
+//! #     fn default() -> Self {
+//! #         Self {
+//! #             arena: Arena::default(),
+//! #         }
+//! #     }
+//! # }
+//! #
+//! # #[derive(Debug)]
+//! # struct Slot<T: Object> {
+//! #     value: T,
+//! #     frobs: u32,
+//! # }
+//! use std::fmt;
+//!
+//! use arid::{Handle, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, Wr};
+//!
+//! impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for MyArena<T>
+//! where
+//!     T: Object<Arena = Self> + fmt::Debug,
+//! {
+//!     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
+//!         let (arena, manager) = Self::arena_and_manager_mut(w);
+//!
+//!         let (handle, keep_alive) = arena.arena.insert(manager, Self::despawn, Slot {
+//!             value,
+//!             frobs: 0,
+//!         });
+//!
+//!         Strong::new(Self::Handle::from_raw(handle), keep_alive)
+//!     }
+//! }
+//!
+//! impl<T> ObjectArena for MyArena<T>
+//! where
+//!     T: Object<Arena = Self> + fmt::Debug,
+//! {
+//!     type Object = T;
+//!     type Handle = T::Handle;
+//!
+//!     fn despawn(slot_idx: u32, w: W) {
+//!         let handle = Self::try_from_slot(slot_idx, w).unwrap();
+//!         <T::Handle>::invoke_pre_destructor(handle, w);
+//!
+//!         Self::arena_mut(w).arena.remove_now(slot_idx);
+//!     }
+//!
+//!     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
+//!         Self::arena(w).arena.get(handle.raw()).map(|v| &v.value)
+//!     }
+//!
+//!     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
+//!         Self::arena_mut(w).arena.get_mut(handle.raw()).map(|v| &mut v.value)
+//!     }
+//!
+//!     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
+//!         Self::arena(w)
+//!             .arena
+//!             .upgrade(Self::manager(w), handle.raw())
+//!             .map(|keep_alive| Strong::new(handle, keep_alive))
+//!     }
+//!
+//!     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
+//!         Self::arena(w)
+//!             .arena
+//!             .slot_to_handle(slot_idx)
+//!             .map(T::Handle::from_raw)
+//!     }
+//!
+//!     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+//!         if let Some(alive) = handle.try_get(w) {
+//!             alive.fmt(f)
+//!         } else {
+//!             f.write_str("<dangling>")
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Finally, we can create extension traits to define new methods on objects within our new arena.
+//!
+//! ```rust
+//! # use arid::{Arena, Object};
+//! #
+//! # #[derive(Debug)]
+//! # pub struct MyArena<T: Object> {
+//! #     arena: Arena<Slot<T>>,
+//! # }
+//! #
+//! # impl<T: Object> Default for MyArena<T> {
+//! #     fn default() -> Self {
+//! #         Self {
+//! #             arena: Arena::default(),
+//! #         }
+//! #     }
+//! # }
+//! #
+//! # #[derive(Debug)]
+//! # struct Slot<T: Object> {
+//! #     value: T,
+//! #     frobs: u32,
+//! # }
+//! # use std::fmt;
+//! #
+//! # use arid::{Handle, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, Wr};
+//! #
+//! # impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for MyArena<T>
+//! # where
+//! #     T: Object<Arena = Self> + fmt::Debug,
+//! # {
+//! #     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
+//! #         let (arena, manager) = Self::arena_and_manager_mut(w);
+//! #
+//! #         let (handle, keep_alive) = arena.arena.insert(manager, Self::despawn, Slot {
+//! #             value,
+//! #             frobs: 0,
+//! #         });
+//! #
+//! #         Strong::new(Self::Handle::from_raw(handle), keep_alive)
+//! #     }
+//! # }
+//! #
+//! # impl<T> ObjectArena for MyArena<T>
+//! # where
+//! #     T: Object<Arena = Self> + fmt::Debug,
+//! # {
+//! #     type Object = T;
+//! #     type Handle = T::Handle;
+//! #
+//! #     fn despawn(slot_idx: u32, w: W) {
+//! #         let handle = Self::try_from_slot(slot_idx, w).unwrap();
+//! #         <T::Handle>::invoke_pre_destructor(handle, w);
+//! #
+//! #         Self::arena_mut(w).arena.remove_now(slot_idx);
+//! #     }
+//! #
+//! #     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
+//! #         Self::arena(w).arena.get(handle.raw()).map(|v| &v.value)
+//! #     }
+//! #
+//! #     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
+//! #         Self::arena_mut(w).arena.get_mut(handle.raw()).map(|v| &mut v.value)
+//! #     }
+//! #
+//! #     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
+//! #         Self::arena(w)
+//! #             .arena
+//! #             .upgrade(Self::manager(w), handle.raw())
+//! #             .map(|keep_alive| Strong::new(handle, keep_alive))
+//! #     }
+//! #
+//! #     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
+//! #         Self::arena(w)
+//! #             .arena
+//! #             .slot_to_handle(slot_idx)
+//! #             .map(T::Handle::from_raw)
+//! #     }
+//! #
+//! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+//! #         if let Some(alive) = handle.try_get(w) {
+//! #             alive.fmt(f)
+//! #         } else {
+//! #             f.write_str("<dangling>")
+//! #         }
+//! #     }
+//! # }
+//! pub trait MyObject: Object<Arena = MyArena<Self>> + fmt::Debug {}
+//!
+//! impl<T: Object<Arena = MyArena<Self>> + fmt::Debug> MyObject for T {}
+//!
+//! pub trait MyHandle: Handle<Object: MyObject> {
+//!     fn frob(self, w: W);
+//!
+//!     fn get_frobs(self, w: Wr) -> u32;
+//! }
+//!
+//! impl<T: Handle<Object: MyObject>> MyHandle for T {
+//!     fn frob(self, w: W) {
+//!         MyArena::<T::Object>::arena_mut(w)
+//!             .arena
+//!             .get_mut(self.raw())
+//!             .expect("value is not alive")
+//!             .frobs += 1;
+//!     }
+//!
+//!     fn get_frobs(self, w: Wr) -> u32 {
+//!         MyArena::<T::Object>::arena(w)
+//!             .arena
+//!             .get(self.raw())
+//!             .expect("value is not alive")
+//!             .frobs
+//!     }
+//! }
+//! ```
+//!
+//! To define an object within the arena, we can use a second form of the [`object!`] macro to
+//! specify a custom arena in which the object should be stored:
+//!
+//! ```
+//! # use arid::{Arena, Object};
+//! #
+//! # #[derive(Debug)]
+//! # pub struct MyArena<T: Object> {
+//! #     arena: Arena<Slot<T>>,
+//! # }
+//! #
+//! # impl<T: Object> Default for MyArena<T> {
+//! #     fn default() -> Self {
+//! #         Self {
+//! #             arena: Arena::default(),
+//! #         }
+//! #     }
+//! # }
+//! #
+//! # #[derive(Debug)]
+//! # struct Slot<T: Object> {
+//! #     value: T,
+//! #     frobs: u32,
+//! # }
+//! # use std::fmt;
+//! #
+//! # use arid::{Handle, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, Wr};
+//! #
+//! # impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for MyArena<T>
+//! # where
+//! #     T: Object<Arena = Self> + fmt::Debug,
+//! # {
+//! #     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
+//! #         let (arena, manager) = Self::arena_and_manager_mut(w);
+//! #
+//! #         let (handle, keep_alive) = arena.arena.insert(manager, Self::despawn, Slot {
+//! #             value,
+//! #             frobs: 0,
+//! #         });
+//! #
+//! #         Strong::new(Self::Handle::from_raw(handle), keep_alive)
+//! #     }
+//! # }
+//! #
+//! # impl<T> ObjectArena for MyArena<T>
+//! # where
+//! #     T: Object<Arena = Self> + fmt::Debug,
+//! # {
+//! #     type Object = T;
+//! #     type Handle = T::Handle;
+//! #
+//! #     fn despawn(slot_idx: u32, w: W) {
+//! #         let handle = Self::try_from_slot(slot_idx, w).unwrap();
+//! #         <T::Handle>::invoke_pre_destructor(handle, w);
+//! #
+//! #         Self::arena_mut(w).arena.remove_now(slot_idx);
+//! #     }
+//! #
+//! #     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
+//! #         Self::arena(w).arena.get(handle.raw()).map(|v| &v.value)
+//! #     }
+//! #
+//! #     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
+//! #         Self::arena_mut(w).arena.get_mut(handle.raw()).map(|v| &mut v.value)
+//! #     }
+//! #
+//! #     fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
+//! #         Self::arena(w)
+//! #             .arena
+//! #             .upgrade(Self::manager(w), handle.raw())
+//! #             .map(|keep_alive| Strong::new(handle, keep_alive))
+//! #     }
+//! #
+//! #     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
+//! #         Self::arena(w)
+//! #             .arena
+//! #             .slot_to_handle(slot_idx)
+//! #             .map(T::Handle::from_raw)
+//! #     }
+//! #
+//! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
+//! #         if let Some(alive) = handle.try_get(w) {
+//! #             alive.fmt(f)
+//! #         } else {
+//! #             f.write_str("<dangling>")
+//! #         }
+//! #     }
+//! # }
+//! # pub trait MyObject: Object<Arena = MyArena<Self>> + fmt::Debug {}
+//! #
+//! # impl<T: Object<Arena = MyArena<Self>> + fmt::Debug> MyObject for T {}
+//! #
+//! # pub trait MyHandle: Handle<Object: MyObject> {
+//! #     fn frob(self, w: W);
+//! #
+//! #     fn get_frobs(self, w: Wr) -> u32;
+//! # }
+//! #
+//! # impl<T: Handle<Object: MyObject>> MyHandle for T {
+//! #     fn frob(self, w: W) {
+//! #         MyArena::<T::Object>::arena_mut(w)
+//! #             .arena
+//! #             .get_mut(self.raw())
+//! #             .expect("value is not alive")
+//! #             .frobs += 1;
+//! #     }
+//! #
+//! #     fn get_frobs(self, w: Wr) -> u32 {
+//! #         MyArena::<T::Object>::arena(w)
+//! #             .arena
+//! #             .get(self.raw())
+//! #             .expect("value is not alive")
+//! #             .frobs
+//! #     }
+//! # }
+//! # use arid::World;
+//! # let mut w = World::new();
+//! # let w = &mut w;
+//! use arid::{object, Object as _};
+//!
+//! #[derive(Debug)]
+//! pub struct MyThing {
+//!     name: &'static str,
+//! }
+//!
+//! object!(pub MyThing[MyArena<Self>]);
+//!
+//! let my_thing = MyThing { name: "Ryleigh" }.spawn(w);
+//!
+//! my_thing.frob(w);
+//! my_thing.m(w).name = "Riley";
+//! assert_eq!(my_thing.get_frobs(w), 1);
+//! ```
+//!
+//! Happy hacking!
 //!
 //! ## Limitations
 //!
