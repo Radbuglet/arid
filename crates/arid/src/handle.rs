@@ -8,7 +8,7 @@ use crate::{
     world_ns,
 };
 
-// === DebugHandle === //
+// === rich_fmt === //
 
 mod rich_fmt {
     use std::{
@@ -160,7 +160,7 @@ where
     }
 
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-        if let Some(alive) = handle.try_get(w) {
+        if let Some(alive) = handle.try_r(w) {
             alive.fmt(f)
         } else {
             f.write_str("<dangling>")
@@ -223,42 +223,32 @@ pub trait Handle:
             .unwrap_or_else(|| panic!("slot index {slot_idx} is not occupied"))
     }
 
-    fn try_get(self, w: Wr) -> Option<&Self::Object> {
+    fn try_r(self, w: Wr) -> Option<&Self::Object> {
         ArenaForHandle::<Self>::try_get(self, w)
     }
 
-    fn try_get_mut(self, w: W) -> Option<&mut Self::Object> {
+    fn try_m(self, w: W) -> Option<&mut Self::Object> {
         ArenaForHandle::<Self>::try_get_mut(self, w)
     }
 
     #[track_caller]
-    fn get(self, w: Wr) -> &Self::Object {
-        match self.try_get(w) {
-            Some(v) => v,
-            None => panic!("attempted to access dangling handle {self:?}"),
-        }
-    }
-
-    #[track_caller]
-    fn get_mut(self, w: W) -> &mut Self::Object {
-        match self.try_get_mut(w) {
-            Some(v) => v,
-            None => panic!("attempted to access dangling handle {self:?}"),
-        }
-    }
-
-    #[track_caller]
     fn r(self, w: Wr) -> &Self::Object {
-        self.get(w)
+        match self.try_r(w) {
+            Some(v) => v,
+            None => panic!("attempted to access dangling handle {self:?}"),
+        }
     }
 
     #[track_caller]
     fn m(self, w: W) -> &mut Self::Object {
-        self.get_mut(w)
+        match self.try_m(w) {
+            Some(v) => v,
+            None => panic!("attempted to access dangling handle {self:?}"),
+        }
     }
 
     fn is_alive(self, w: Wr) -> bool {
-        self.try_get(w).is_some()
+        self.try_r(w).is_some()
     }
 
     #[track_caller]

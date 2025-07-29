@@ -183,8 +183,7 @@
 //! ```
 //!
 //! We can then access the handle's value immutably using the [`Handle::r`] method and mutably using
-//! the [`Handle::m`] method. These methods are short aliases for the more conventionally-named
-//! [`Handle::get`] and [`Handle::get_mut`] methods respectively.
+//! the [`Handle::m`] method.
 //!
 //! ```
 //! # use arid::World;

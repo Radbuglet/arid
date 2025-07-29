@@ -226,11 +226,7 @@ impl ObjectArena for EntityArena {
 
         EntityHandle::invoke_pre_destructor(handle, w);
 
-        let arch = Self::arena_mut(w)
-            .arena
-            .remove_now(slot_idx)
-            .unwrap()
-            .archetype;
+        let arch = Self::arena_mut(w).arena.remove_now(slot_idx).archetype;
 
         let comp_set = Self::arena(w).archetypes.component_set(arch).clone();
 
@@ -444,7 +440,7 @@ impl<T: Component> ObjectArena for ComponentArena<T> {
     }
 
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-        if let Some(alive) = handle.try_get(w) {
+        if let Some(alive) = handle.try_r(w) {
             alive.fmt(f)
         } else {
             f.write_str("<dangling>")
