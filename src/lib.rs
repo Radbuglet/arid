@@ -775,7 +775,7 @@
 //!     }
 //!
 //!     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-//!         if let Some(alive) = handle.try_get(w) {
+//!         if let Some(alive) = handle.try_r(w) {
 //!             alive.fmt(f)
 //!         } else {
 //!             f.write_str("<dangling>")
@@ -864,7 +864,7 @@
 //! #     }
 //! #
 //! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-//! #         if let Some(alive) = handle.try_get(w) {
+//! #         if let Some(alive) = handle.try_r(w) {
 //! #             alive.fmt(f)
 //! #         } else {
 //! #             f.write_str("<dangling>")
@@ -981,7 +981,7 @@
 //! #     }
 //! #
 //! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-//! #         if let Some(alive) = handle.try_get(w) {
+//! #         if let Some(alive) = handle.try_r(w) {
 //! #             alive.fmt(f)
 //! #         } else {
 //! #             f.write_str("<dangling>")
