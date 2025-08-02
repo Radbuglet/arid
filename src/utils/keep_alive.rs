@@ -105,11 +105,16 @@ impl<T: Copy> KeepAliveList<T> {
         // all slots we allocated will be alive as long as our `KeepAliveListInner` is alive.
         let slot = unsafe { ptr.0.as_ref() };
 
-        if slot.strong_refs.load(Relaxed) == usize::MAX {
-            slot.strong_refs.store(1, Relaxed);
-
-            _ = Arc::into_raw(self.inner.clone());
-        } else if slot.strong_refs.fetch_add(1, Relaxed) == 0 {
+        if
+        // If we resurrected a confirmed condemned slot...
+        slot
+            .strong_refs
+            .compare_exchange(usize::MAX, 1, Relaxed, Relaxed)
+            .is_ok()
+            // ...or if we resurrected a slot which has not yet been confirmed dead...
+            || slot.strong_refs.fetch_add(1, Relaxed) == 0
+        {
+            // ...bring back the strong reference to the list.
             _ = Arc::into_raw(self.inner.clone());
         }
 
