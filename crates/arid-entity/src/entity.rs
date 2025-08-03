@@ -147,6 +147,11 @@ impl EntityHandle {
         self
     }
 
+    pub fn with_fn<R>(self, f: impl FnOnce(Self, W) -> R, w: W) -> Self {
+        f(self, w);
+        self
+    }
+
     pub fn try_get<T: ComponentHandle>(self, w: Wr) -> Option<T> {
         ComponentArena::<T::Object>::arena(w)
             .entity_map
