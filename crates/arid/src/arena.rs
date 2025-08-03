@@ -21,17 +21,6 @@ use crate::{
 #[non_exhaustive]
 pub(crate) struct ArenaManagerWrapper(pub(crate) ArenaManager);
 
-/// A per-[`World`] singleton tracking [`KeepAlive`]s.
-///
-/// This item exposes no useful functionality to end users in and of itself. It is public since
-/// methods such as [`Arena::insert`] and [`Arena::upgrade`] require access to it, which is only
-/// relevant when [defining custom arenas](index.html#custom-arenas).
-///
-/// You can fetch a reference to this instance using [`ObjectArena::manager`] or
-/// [`ObjectArena::arena_and_manager_mut`].
-///
-/// [`ObjectArena::manager`]: crate::ObjectArena::manager
-/// [`ObjectArena::arena_and_manager_mut`]: crate::ObjectArena::arena_and_manager_mut
 #[derive(Debug)]
 pub struct ArenaManager {
     uid: NonZeroU64,
@@ -73,21 +62,6 @@ impl World {
 
 // === Arena === //
 
-/// A raw arena efficiently mapping [`RawHandle`]s to values of type `T`.
-///
-/// This item is generally only relevant when [defining custom arenas](index.html#custom-arenas).
-/// End-user code normally interacts with this object only indirectly through the methods on
-/// [`Handle`](crate::Handle) and [`Object`](crate::Object).
-///
-/// `Arena`s should live for the full duration of their managing [`ArenaManager`], which itself
-/// lives as long as the `Arena`'s containing `World`. This is because `Arena`s leak [`KeepAlive`]
-/// slots when dropped and these slots are only reclaimed when the `ArenaManager` is dropped.
-///
-/// `Arena`s are required to construct [`KeepAlive`] instances, which are required to construct the
-/// [`Strong`](crate::Strong) handle wrappers [`ObjectArenaSimpleSpawn::spawn`] expects to have
-/// returned. As such, `ObjectArena`s are generally expected to have exactly one `Arena` instance.
-///
-/// [`ObjectArenaSimpleSpawn::spawn`]: crate::ObjectArenaSimpleSpawn::spawn
 #[derive_where(Default)]
 pub struct Arena<T> {
     header: Box<ArenaHeader>,
@@ -108,11 +82,6 @@ impl<T> fmt::Debug for Arena<T> {
 }
 
 impl<T> Arena<T> {
-    /// Creates a new object in the arena with value `T`. Returns the object's [`RawHandle`] and
-    /// [`KeepAlive`].
-    ///
-    /// Neither the `manager` nor the `destructor` used with a given arena may change during
-    /// subsequent calls to a given arena.
     pub fn insert(
         &mut self,
         manager: &mut ArenaManager,
@@ -168,7 +137,6 @@ impl<T> Arena<T> {
         (handle, keep_alive)
     }
 
-    /// Fetches a [`RawHandle`] for a given `slot_idx`, returning `None` if the slot is vacant.
     pub fn slot_to_handle(&self, slot_idx: u32) -> Option<RawHandle> {
         let state = &self.slots[slot_idx as usize];
 
@@ -178,8 +146,6 @@ impl<T> Arena<T> {
         })
     }
 
-    /// Immediately removes the value in the specified `slot_idx` from the arena, panicking if the
-    /// slot was vacant.
     pub fn remove_now(&mut self, slot_idx: u32) -> T {
         let slot = &mut self.slots[slot_idx as usize];
 
