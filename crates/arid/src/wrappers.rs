@@ -45,7 +45,7 @@ impl<T: Handle> Strong<T> {
         &me.keep_alive
     }
 
-    pub fn as_raw(self) -> T {
+    pub fn as_weak(&self) -> T {
         self.handle
     }
 }
@@ -267,7 +267,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
         &self.keep_alive
     }
 
-    pub fn downgrade(&self) -> Erased<T> {
+    pub fn as_weak(&self) -> Erased<T> {
         Erased {
             handle: self.raw(),
             unerase: self.unerase,
@@ -286,7 +286,7 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
     }
 
     pub fn try_downcast_ref<V: Handle>(&self) -> Option<V> {
-        self.downgrade().try_downcast::<V>()
+        self.as_weak().try_downcast::<V>()
     }
 
     #[track_caller]
@@ -303,11 +303,11 @@ impl<T: ?Sized + ErasedHandle> StrongErased<T> {
 
     #[track_caller]
     pub fn downcast_ref<V: Handle>(&self) -> V {
-        self.downgrade().downcast::<V>()
+        self.as_weak().downcast::<V>()
     }
 
     pub fn debug<'w>(&self, w: Wr<'w>) -> WorldDebug<'w, Erased<T>> {
-        WorldDebug::new(self.downgrade(), w)
+        WorldDebug::new(self.as_weak(), w)
     }
 }
 
