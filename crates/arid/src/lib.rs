@@ -804,13 +804,6 @@
 //!         Some(Strong::new(handle, keep_alive))
 //!     }
 //!
-//!     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-//!         w.arena::<Self>()
-//!             .arena
-//!             .slot_to_handle(slot_idx)
-//!             .map(Self::Handle::from_raw)
-//!     }
-//!
 //!     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
 //!         if let Some(alive) = handle.try_r(w) {
 //!             alive.fmt(f)
@@ -915,13 +908,6 @@
 //! #         let keep_alive = manager.upgrade(slot.keep_alive);
 //! #
 //! #         Some(Strong::new(handle, keep_alive))
-//! #     }
-//! #
-//! #     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-//! #         w.arena::<Self>()
-//! #             .arena
-//! #             .slot_to_handle(slot_idx)
-//! #             .map(Self::Handle::from_raw)
 //! #     }
 //! #
 //! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
@@ -1059,13 +1045,6 @@
 //! #         Some(Strong::new(handle, keep_alive))
 //! #     }
 //! #
-//! #     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-//! #         w.arena::<Self>()
-//! #             .arena
-//! #             .slot_to_handle(slot_idx)
-//! #             .map(Self::Handle::from_raw)
-//! #     }
-//! #
 //! #     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
 //! #         if let Some(alive) = handle.try_r(w) {
 //! #             alive.fmt(f)
@@ -1147,6 +1126,8 @@
 //!
 //! [ergonomic ref-counting]: https://rust-lang.github.io/rust-project-goals/2024h2/ergonomic-rc.html
 //!
+
+#![warn(missing_docs)]
 
 mod arena;
 pub use self::arena::*;

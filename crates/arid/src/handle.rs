@@ -46,6 +46,7 @@ mod rich_fmt {
         }))
     }
 
+    #[expect(missing_docs)] // (never exposed in the public API)
     pub fn format_handle<T: Handle>(f: &mut fmt::Formatter<'_>, handle: T) -> fmt::Result {
         World::fetch_tls(|cx| {
             f.write_str(type_name::<T::Object>())?;
@@ -66,25 +67,58 @@ mod rich_fmt {
 
 // === ObjectArena === //
 
+/// An [`ObjectArena`] which supports the [`Object::spawn`] method.
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
+///
+/// This trait is generally implemented on every object implementing the `ObjectArena` trait unless
+/// the value's constructor needs additional arguments.
 pub trait ObjectArenaSimpleSpawn: ObjectArena {
+    /// Implements the [`Object::spawn`] operation.
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle>;
 }
 
+/// A custom arena managing a specific type of [`Object`].
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
 pub trait ObjectArena: 'static + Default {
+    /// The [`Object`] being managed by the arena.
     type Object: Object<Handle = Self::Handle, Arena = Self>;
+
+    /// The [`Handle`] being managed by the arena.
     type Handle: Handle<Object = Self::Object>;
 
+    /// Implements the [`Handle::try_r`] operation.
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object>;
 
+    /// Implements the [`Handle::try_m`] operation.
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object>;
 
+    /// Implements the [`Handle::as_strong_if_alive`] operation.
     fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>>;
 
-    fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle>;
-
+    /// Implements the [`Handle`]'s [`fmt::Debug`] operation.
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result;
 }
 
+/// The default implementation of [`ObjectArena`] used for [`Object`]s when no custom arena is
+/// specified.
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
+///
+/// This type combines a [`RawArena`] managing values of type `T` with an out-of-band list of
+/// [`KeepAliveIndex`]es to implement `ObjectArena`s operations. This type can be embedded in other
+/// custom arenas which delegate their trait member implementations to this type to simplify the
+/// creation of new arenas.
 #[derive_where(Default)]
 pub struct DefaultObjectArena<T> {
     arena: RawArena<T>,
@@ -98,14 +132,18 @@ impl<T> fmt::Debug for DefaultObjectArena<T> {
 }
 
 impl<T> DefaultObjectArena<T> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
+    /// Creates a new [`RawHandle`] and [`KeepAlive`] pair managed by the specified `manager`.
+    ///
+    /// The `destructor` function pointer is used as the `destructor` field in the
+    /// [`WorldKeepAliveUserdata`] passed to the `manager` to create the returned [`KeepAlive`].
+    /// This function pointer is called, for example, by [`World::flush`](crate::World::flush) once
+    /// all remaining [`KeepAlive`]s to this value have been dropped, and it is up to the destructor
+    /// to call [`DefaultObjectArena::despawn`] to ensure that the handle is properly marked as
+    /// destroyed.
     pub fn spawn(
         &mut self,
         manager: &mut WorldKeepAliveManager,
-        destructor: fn(RawHandle, W),
+        destructor: fn(handle: RawHandle, w: W),
         value: T,
     ) -> (RawHandle, KeepAlive) {
         let handle = self.arena.insert(value);
@@ -117,6 +155,14 @@ impl<T> DefaultObjectArena<T> {
         (handle, keep_alive)
     }
 
+    /// Forwards to the internal arena's [`RawArena::slot_to_handle`] method.
+    ///
+    /// This method should be called in response to the `destructor` passed to
+    /// [`DefaultObjectArena::spawn`] being called.
+    ///
+    /// Although it is possible to call this method against a given handle before that handle is
+    /// confirmed destroyed by its associated [`KeepAliveManager`](crate::KeepAliveManager), doing
+    /// so is a bit unconventional.
     pub fn despawn(&mut self, handle: RawHandle) -> Option<T> {
         let value = self.arena.remove(handle);
         self.resize_keep_alive();
@@ -124,10 +170,8 @@ impl<T> DefaultObjectArena<T> {
         value
     }
 
-    pub fn slot_to_handle(&self, slot_idx: u32) -> Option<RawHandle> {
-        self.arena.slot_to_handle(slot_idx)
-    }
-
+    /// Attempts to produce a [`KeepAlive`] for a given [`RawHandle`] which has not yet been
+    /// destroyed by [`DefaultObjectArena::despawn`]. Returns `None` if the `handle` is dangling.
     pub fn upgrade(
         &mut self,
         manager: &mut WorldKeepAliveManager,
@@ -141,14 +185,22 @@ impl<T> DefaultObjectArena<T> {
         Some(keep_alive)
     }
 
+    /// Forwards to the internal arena's [`RawArena::slot_to_handle`] method.
+    pub fn slot_to_handle(&self, slot_idx: u32) -> Option<RawHandle> {
+        self.arena.slot_to_handle(slot_idx)
+    }
+
+    /// Forwards to the internal arena's [`RawArena::get`] method.
     pub fn get(&self, handle: RawHandle) -> Option<&T> {
         self.arena.get(handle)
     }
 
+    /// Forwards to the internal arena's [`RawArena::get_mut`] method.
     pub fn get_mut(&mut self, handle: RawHandle) -> Option<&mut T> {
         self.arena.get_mut(handle)
     }
 
+    /// Forwards to the internal arena's [`RawArena::slot_count`] method.
     pub fn slot_count(&self) -> u32 {
         self.arena.slot_count()
     }
@@ -209,12 +261,6 @@ where
         Some(Strong::new(handle, keep_alive))
     }
 
-    fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-        w.arena::<Self>()
-            .slot_to_handle(slot_idx)
-            .map(T::Handle::from_raw)
-    }
-
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
         if let Some(alive) = handle.try_r(w) {
             alive.fmt(f)
@@ -226,16 +272,46 @@ where
 
 // === Traits === //
 
+/// Fetches the [`Object::Arena`] associated type for a given type implementing [`Handle`].
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
 pub type ArenaForHandle<H> = <<H as Handle>::Object as Object>::Arena;
 
+/// Provides a destructor to a [`Handle`]'s associated [`Object`].
 pub trait Destructor: Handle {
+    /// Called right before the handle is destroyed.
+    ///
+    /// Although weak handles to the value are still valid at the point this method is called,
+    /// attempts to "resurrect" the handle with [`Handle::as_strong`] will result in unspecified
+    /// behavior.
     fn pre_destroy(self, w: W);
 }
 
+/// A value which can be allocated in `arid`'s object model.
+///
+/// This trait cannot be implemented manually and must be implemented through the
+/// [`object!`](crate::object!) macro.
 pub trait Object: 'static + Sized + LateField<world_ns::WorldNs, Value = Self::Arena> {
+    /// The type of the [`ObjectArena`] in which the `Object` is stored.
+    ///
+    /// By default, if no custom arena is supplied to the [`object!`](crate::object!) macro, this
+    /// type will be [`DefaultObjectArena`].
     type Arena: ObjectArena<Object = Self, Handle = Self::Handle>;
+
+    /// The type of the [`Handle`] associated with the `Object`.
+    ///
+    /// This type is automatically generated at the site of the [`object!`](crate::object!) macro's
+    /// expansion and will be named `<StructName>Handle`.
     type Handle: Handle<Object = Self>;
 
+    /// Moves the value into the object's arena and returns a [`Strong`] handle to it.
+    ///
+    /// This method is only available if the [`Object::Arena`] implements
+    /// [`ObjectArenaSimpleSpawn`]. The default arena, [`DefaultObjectArena`], implements this
+    /// trait.
     #[must_use]
     fn spawn(self, w: W) -> Strong<Self::Handle>
     where
@@ -245,6 +321,28 @@ pub trait Object: 'static + Sized + LateField<world_ns::WorldNs, Value = Self::A
     }
 }
 
+/// A weak handle to a value allocated within `arid`'s object model.
+///
+/// This trait cannot be implemented manually. Instead, a custom type named `<StructName>Handle`
+/// implementing trait will be automatically generated at the site of the
+/// [`object!`](crate::object!) macro's expansion.
+///
+/// Unlike many other smart-pointers in Rust, this handle is `Copy`able.
+///
+/// This handle does not contribute to the strong reference count of the pointee. To keep a value
+/// in the arena alive, one can use the [`Strong`] handle wrapper, which is returned by the
+/// [`Object::spawn`] method and can be obtained from a weak-handle using the [`Handle::as_strong`]
+/// method. Do note, however, that objects without remaining strong handles will not be destroyed
+/// until [`World::flush`](crate::World::flush) is called.
+///
+/// The behavior of `Handle`s associated with one [`World`](crate::World) when used against another
+/// `World` is unspecified. Additionally, a given `Handle`'s value may be reused across multiple
+/// `World`s.
+///
+/// Although handles implement the [`fmt::Debug`](fmt::Debug) trait, they will not perform
+/// pretty-printing on the handle's underlying value unless the `World` owning the value is provided
+/// over thread-local storage using either [`World::provide_tls`](crate::World::provide_tls) or the
+/// [`WorldDebug`] wrapper obtained using [`Handle::debug`].
 pub trait Handle:
     'static
     + Sized
@@ -258,60 +356,77 @@ pub trait Handle:
     + ErasedHandle
     + TransparentWrapper<RawHandle>
 {
+    /// The type of the [`Object`] associated with the `Handle`.
     type Object: Object<Handle = Self>;
 
+    /// Invokes the handle's custom destructor if the current handle implements the [`Destructor`]
+    /// trait. Otherwise, the method does nothing.
+    ///
+    /// <div class="warning">
+    /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+    /// custom arena</a>.
+    /// </div>
     fn invoke_pre_destructor(me: Self, w: W);
 
+    /// Converts a [`RawHandle`] into this strongly-typed wrapper to the handle.
     fn from_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
     }
 
+    /// Fetches the [`RawHandle`] underlying this strongly-type wrapper to it.
     fn raw(self) -> RawHandle {
         TransparentWrapper::peel(self)
     }
 
-    fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self> {
-        ArenaForHandle::<Self>::try_from_slot(slot_idx, w)
-    }
-
-    fn from_slot(slot_idx: u32, w: Wr) -> Self {
-        Self::try_from_slot(slot_idx, w)
-            .unwrap_or_else(|| panic!("slot index {slot_idx} is not occupied"))
-    }
-
-    fn try_r(self, w: Wr) -> Option<&Self::Object> {
+    /// Attempts to dereference the handle, returning an immutable reference to its associated
+    /// [`Handle::Object`] if the handle is still alive or `None` if the value was destroyed.
+    fn try_r(self, w: Wr<'_>) -> Option<&Self::Object> {
         ArenaForHandle::<Self>::try_get(self, w)
     }
 
-    fn try_m(self, w: W) -> Option<&mut Self::Object> {
+    /// Attempts to dereference the handle, returning a mutable reference to its associated
+    /// [`Handle::Object`] if the handle is still alive or `None` if the value was destroyed.
+    fn try_m(self, w: W<'_>) -> Option<&mut Self::Object> {
         ArenaForHandle::<Self>::try_get_mut(self, w)
     }
 
+    /// Dereferences the handle, returning an immutable reference to its associated
+    /// [`Handle::Object`].
+    ///
+    /// Panics if the pointee was destroyed.
     #[track_caller]
-    fn r(self, w: Wr) -> &Self::Object {
+    fn r(self, w: Wr<'_>) -> &Self::Object {
         match self.try_r(w) {
             Some(v) => v,
             None => panic!("attempted to access dangling handle {self:?}"),
         }
     }
 
+    /// Dereferences the handle, returning a mutable reference to its associated [`Handle::Object`].
+    ///
+    /// Panics if the pointee was destroyed.
     #[track_caller]
-    fn m(self, w: W) -> &mut Self::Object {
+    fn m(self, w: W<'_>) -> &mut Self::Object {
         match self.try_m(w) {
             Some(v) => v,
             None => panic!("attempted to access dangling handle {self:?}"),
         }
     }
 
+    /// Returns whether the handle is still alive.
     fn is_alive(self, w: Wr) -> bool {
         self.try_r(w).is_some()
     }
 
-    #[track_caller]
+    /// Attempts to convert the weak handle into its [`Strong`] counterpart, returning `None` if the
+    /// handle has been destroyed.
     fn as_strong_if_alive(self, w: W) -> Option<Strong<Self>> {
         ArenaForHandle::<Self>::as_strong_if_alive(self, w)
     }
 
+    /// Converts the weak handle into its [`Strong`] counterpart.
+    ///
+    /// Panics if the handle has been destroyed.
     #[track_caller]
     fn as_strong(self, w: W) -> Strong<Self> {
         match self.as_strong_if_alive(w) {
@@ -320,7 +435,9 @@ pub trait Handle:
         }
     }
 
-    fn debug(self, w: Wr) -> WorldDebug<'_, Self> {
+    /// Wraps the handle in a [`WorldDebug`] instance which, when printed using its [`fmt::Debug`]
+    /// implementation, will pretty-print the value of the handle.
+    fn debug(self, w: Wr<'_>) -> WorldDebug<'_, Self> {
         WorldDebug::new(self, w)
     }
 }
@@ -401,9 +518,25 @@ pub mod object_internals {
     }
 }
 
+/// Defines a new [`Object`] which can be allocated within `arid`'s object model.
+///
+/// `$vis` must match the visibility of the structure against which the [`Object`] trait is being
+/// implemented.
+///
+/// `$ty` is the simple name—and not a path to!—the type against which the [`Object`] trait will
+/// be implemented.
+///
+/// `$arena` is an optional type implementing the [`ObjectArena`] trait which indicates the value of
+/// the [`Object::Arena`] associated type. This type indicates the custom arena in which the value
+/// should be allocated. If omitted, this type will default to [`DefaultObjectArena`].
 #[macro_export]
 macro_rules! object {
-    ( $( $vis:vis $ty:ident $([$arena:ty])? ),*$(,)? ) => {$(
+    (
+        $(
+            $vis:vis $ty:ident $([$arena:ty])?
+        ),*
+        $(,)?
+    ) => {$(
         $crate::object_internals::paste! {
             #[derive(
                 $crate::object_internals::Copy,

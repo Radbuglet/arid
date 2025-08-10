@@ -6,7 +6,7 @@ use std::{
 
 // === KeepAliveManager === //
 
-/// Manages a set of [`KeepAlive`]s, notifying when all `KeepAlive`s to a value are dropped.
+/// Manages a set of [`KeepAlive`]s and notifies when all `KeepAlive`s to a given value are dropped.
 ///
 /// <div class="warning">
 /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
@@ -216,7 +216,7 @@ impl KeepAliveIndex {
     }
 }
 
-/// A cloneable guard keeping some logical value alive.
+/// A cloneable guard tracked by a [`KeepAliveManager`] which keeps some logical value alive.
 ///
 /// <div class="warning">
 /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
