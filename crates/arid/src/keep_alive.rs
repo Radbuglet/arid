@@ -13,6 +13,11 @@ use std::{
 /// custom arena</a>.
 /// </div>
 ///
+/// In the context of defining custom arenas, the `KeepAliveManager` for a given
+/// [`World`](crate::World) can be obtained using the [`World::manager`](crate::World::manager),
+/// [`World::manager_mut`](crate::World::manager_mut), and
+/// [`World::arena_and_manager_mut`](crate::World::arena_and_manager_mut) methods.
+///
 /// A [`KeepAlive`] is a cloneable reference-counted guard indicating that a given value should not
 /// yet be destroyed. You can create a new `KeepAlive` using [`KeepAliveManager::allocate`]
 /// alongside some userdata of type `T` providing information about what the `KeepAlive` is keeping
