@@ -16,7 +16,7 @@ pub type W<'a> = &'a mut World;
 /// An alias to [`&World`](World).
 pub type Wr<'a> = &'a World;
 
-/// A context in which objects are allocated.
+/// A context in which [`Object`](crate::Object)s are allocated.
 ///
 /// Objects allocated in one world cannot be accessed by another.
 #[derive(Default)]

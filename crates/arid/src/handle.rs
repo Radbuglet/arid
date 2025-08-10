@@ -369,11 +369,21 @@ pub trait Handle:
     fn invoke_pre_destructor(me: Self, w: W);
 
     /// Converts a [`RawHandle`] into this strongly-typed wrapper to the handle.
+    ///
+    /// <div class="warning">
+    /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+    /// custom arena</a>.
+    /// </div>
     fn from_raw(raw: RawHandle) -> Self {
         TransparentWrapper::wrap(raw)
     }
 
     /// Fetches the [`RawHandle`] underlying this strongly-type wrapper to it.
+    ///
+    /// <div class="warning">
+    /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+    /// custom arena</a>.
+    /// </div>
     fn raw(self) -> RawHandle {
         TransparentWrapper::peel(self)
     }
@@ -424,9 +434,8 @@ pub trait Handle:
         ArenaForHandle::<Self>::as_strong_if_alive(self, w)
     }
 
-    /// Converts the weak handle into its [`Strong`] counterpart.
-    ///
-    /// Panics if the handle has been destroyed.
+    /// Converts the weak handle into its [`Strong`] counterpart, panicking if the handle has been
+    /// destroyed.
     #[track_caller]
     fn as_strong(self, w: W) -> Strong<Self> {
         match self.as_strong_if_alive(w) {

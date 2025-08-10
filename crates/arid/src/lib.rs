@@ -1127,7 +1127,7 @@
 //! [ergonomic ref-counting]: https://rust-lang.github.io/rust-project-goals/2024h2/ergonomic-rc.html
 //!
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 mod arena;
 pub use self::arena::*;
