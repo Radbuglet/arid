@@ -1,11 +1,12 @@
 use std::{fmt, hash};
 
 use bytemuck::TransparentWrapper;
+use derive_where::derive_where;
 use late_struct::LateField;
 
 use crate::{
-    Arena, ArenaManager, ArenaManagerWrapper, ErasedHandle, RawHandle, Strong, W, WorldDebug, Wr,
-    world_ns,
+    Arena, ErasedHandle, KeepAliveIndex, RawHandle, Strong, W, WorldDebug, WorldKeepAliveUserdata,
+    Wr, world_ns,
 };
 
 // === rich_fmt === //
@@ -63,98 +64,91 @@ mod rich_fmt {
     }
 }
 
-// === Meta === //
+// === ObjectArena === //
 
 pub trait ObjectArenaSimpleSpawn: ObjectArena {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle>;
 }
 
-pub trait ObjectArena: 'static + Default + fmt::Debug {
+pub trait ObjectArena: 'static + Default {
     type Object: Object<Handle = Self::Handle, Arena = Self>;
     type Handle: Handle<Object = Self::Object>;
-
-    // === Accessors === //
-
-    #[must_use]
-    fn arena(w: Wr<'_>) -> &Self {
-        w.inner.get::<Self::Object>()
-    }
-
-    #[must_use]
-    fn manager(w: Wr<'_>) -> &ArenaManager {
-        &w.inner.get::<ArenaManagerWrapper>().0
-    }
-
-    #[must_use]
-    fn arena_mut(w: W<'_>) -> &mut Self {
-        w.inner.get_mut::<Self::Object>()
-    }
-
-    #[must_use]
-    fn arena_and_manager_mut(w: W<'_>) -> (&mut Self, &mut ArenaManager) {
-        let (arena, manager) = w.inner.get_two::<Self::Object, ArenaManagerWrapper>();
-
-        (arena, &mut manager.0)
-    }
-
-    // === Hooks === //
-
-    fn despawn(slot_idx: u32, w: W);
 
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object>;
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object>;
 
-    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>>;
+    fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>>;
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle>;
 
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result;
 }
 
-impl<T> ObjectArenaSimpleSpawn for Arena<T>
+#[derive_where(Default)]
+pub struct DefaultObjectArena<T> {
+    arena: Arena<T>,
+    keep_alive: Vec<KeepAliveIndex>,
+}
+
+impl<T> fmt::Debug for DefaultObjectArena<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DefaultObjectArena").finish_non_exhaustive()
+    }
+}
+
+impl<T> ObjectArenaSimpleSpawn for DefaultObjectArena<T>
 where
     T: Object<Arena = Self> + fmt::Debug,
 {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
-        let (arena, manager) = Self::arena_and_manager_mut(w);
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
+        let handle = arena.arena.insert(value);
+        let keep_alive = manager.allocate(WorldKeepAliveUserdata {
+            destructor: Self::despawn,
+            handle,
+        });
 
-        let (handle, keep_alive) = arena.insert(manager, Self::despawn, value);
+        if arena.keep_alive.len() <= handle.slot() as usize {
+            arena
+                .keep_alive
+                .resize(handle.slot() as usize + 1, KeepAliveIndex::MAX);
+        }
+
+        arena.keep_alive[handle.slot() as usize] = keep_alive.index();
 
         Strong::new(Self::Handle::from_raw(handle), keep_alive)
     }
 }
 
-impl<T: Object<Arena = Self>> ObjectArena for Arena<T>
+impl<T> ObjectArena for DefaultObjectArena<T>
 where
     T: Object<Arena = Self> + fmt::Debug,
 {
     type Object = T;
     type Handle = T::Handle;
 
-    fn despawn(slot_idx: u32, w: W) {
-        let handle = Self::try_from_slot(slot_idx, w).unwrap();
-        <T::Handle>::invoke_pre_destructor(handle, w);
-
-        Self::arena_mut(w).remove_now(slot_idx);
-    }
-
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        Self::arena(w).get(handle.raw())
+        w.arena::<Self>().arena.get(handle.raw())
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        Self::arena_mut(w).get_mut(handle.raw())
+        w.arena_mut::<Self>().arena.get_mut(handle.raw())
     }
 
-    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
-        Self::arena(w)
-            .upgrade(Self::manager(w), handle.raw())
-            .map(|keep_alive| Strong::new(handle, keep_alive))
+    fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>> {
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
+
+        _ = arena.arena.get(handle.raw())?;
+
+        let index = arena.keep_alive[handle.raw().slot() as usize];
+
+        Some(Strong::new(handle, manager.upgrade(index)))
     }
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-        Self::arena(w)
+        w.arena::<Self>()
+            .arena
             .slot_to_handle(slot_idx)
             .map(T::Handle::from_raw)
     }
@@ -165,6 +159,19 @@ where
         } else {
             f.write_str("<dangling>")
         }
+    }
+}
+
+impl<T> DefaultObjectArena<T>
+where
+    T: Object<Arena = Self> + fmt::Debug,
+{
+    fn despawn(handle: RawHandle, w: W) {
+        let handle = <T::Handle>::from_raw(handle);
+
+        <T::Handle>::invoke_pre_destructor(handle, w);
+
+        w.arena_mut::<Self>().arena.remove(handle.raw());
     }
 }
 
@@ -252,12 +259,12 @@ pub trait Handle:
     }
 
     #[track_caller]
-    fn as_strong_if_alive(self, w: Wr) -> Option<Strong<Self>> {
+    fn as_strong_if_alive(self, w: W) -> Option<Strong<Self>> {
         ArenaForHandle::<Self>::as_strong_if_alive(self, w)
     }
 
     #[track_caller]
-    fn as_strong(self, w: Wr) -> Strong<Self> {
+    fn as_strong(self, w: W) -> Strong<Self> {
         match self.as_strong_if_alive(w) {
             Some(v) => v,
             None => panic!("attempted to upgrade dangling handle {self:?}"),
@@ -274,6 +281,8 @@ pub trait Handle:
 #[doc(hidden)]
 pub mod object_internals {
     use std::{marker::PhantomData, ops::Deref};
+
+    use crate::DefaultObjectArena;
 
     use super::Destructor;
 
@@ -302,7 +311,7 @@ pub mod object_internals {
         type Output = R;
     }
 
-    pub type CustomArenaOrDefault<Value, CustomArena = Arena<Value>> =
+    pub type CustomArenaOrDefault<Value, CustomArena = DefaultObjectArena<Value>> =
         TakeSecond<Value, CustomArena>;
 
     pub trait PreDestroyDispatchTrait {
