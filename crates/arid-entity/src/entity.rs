@@ -11,8 +11,8 @@ use std::{
 };
 
 use arid::{
-    Arena, Erased, ErasedHandle, Handle, Object, ObjectArena, ObjectArenaSimpleSpawn, Strong, W,
-    Wr, object, object_internals::TransparentWrapper,
+    DefaultObjectArena, Erased, ErasedHandle, Handle, Object, ObjectArena, ObjectArenaSimpleSpawn,
+    Strong, W, Wr, object, object_internals::TransparentWrapper,
 };
 use derive_where::derive_where;
 use rustc_hash::FxHashMap;
@@ -103,7 +103,7 @@ impl EntityHandle {
 
         // Update annotation entry
         {
-            let state = ComponentArena::<T::Object>::arena_mut(w);
+            let state = w.arena_mut::<ComponentArena<T::Object>>();
 
             if let Some(moved) = state.entity_map.insert(self, handle) {
                 state.annotations[moved.raw().slot() as usize].entity = None;
@@ -114,7 +114,8 @@ impl EntityHandle {
 
         // Update archetype
         let old_arch = self.r(w).archetype;
-        let new_arch = EntityArena::arena_mut(w)
+        let new_arch = w
+            .arena_mut::<EntityArena>()
             .archetypes
             .lookup_extend(old_arch, ComponentId::of::<T::Object>());
 
@@ -153,7 +154,7 @@ impl EntityHandle {
     }
 
     pub fn try_get<T: ComponentHandle>(self, w: Wr) -> Option<T> {
-        ComponentArena::<T::Object>::arena(w)
+        w.arena::<ComponentArena<T::Object>>()
             .entity_map
             .get(&self)
             .map(|v| **v)
@@ -196,16 +197,18 @@ impl EntityHandle {
     pub fn traits<E: ?Sized + ErasedHandle>(self, w: Wr) -> EntityTraitIter<E> {
         let arch = self.r(w).archetype;
 
-        EntityArena::arena(w).archetypes.traits(arch).iter(self)
+        w.arena::<EntityArena>().archetypes.traits(arch).iter(self)
     }
 }
 
 mod entity_arena {
+    use arid::DefaultObjectArena;
+
     use super::*;
 
     #[derive(Debug, Default)]
     pub struct EntityArena {
-        pub(super) arena: Arena<Entity>,
+        pub(super) arena: DefaultObjectArena<Entity>,
         pub(super) archetypes: ArchetypeStore,
     }
 }
@@ -214,9 +217,30 @@ use self::entity_arena::EntityArena;
 
 impl ObjectArenaSimpleSpawn for EntityArena {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
-        let (arena, manager) = Self::arena_and_manager_mut(w);
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
 
-        let (handle, keep_alive) = arena.arena.insert(manager, Self::despawn, value);
+        let (handle, keep_alive) = arena.arena.spawn(
+            manager,
+            |handle, w| {
+                let handle = EntityHandle::wrap(handle);
+
+                EntityHandle::invoke_pre_destructor(handle, w);
+
+                let arch = w
+                    .arena_mut::<Self>()
+                    .arena
+                    .despawn(handle.raw())
+                    .unwrap()
+                    .archetype;
+
+                let comp_set = w.arena::<Self>().archetypes.component_set(arch).clone();
+
+                for comp in comp_set.iter() {
+                    (comp.detach_during_delete)(handle, w);
+                }
+            },
+            value,
+        );
 
         Strong::new(EntityHandle::wrap(handle), keep_alive)
     }
@@ -226,37 +250,25 @@ impl ObjectArena for EntityArena {
     type Object = Entity;
     type Handle = EntityHandle;
 
-    fn despawn(slot_idx: u32, w: W) {
-        let handle = EntityHandle::wrap(Self::arena(w).arena.slot_to_handle(slot_idx).unwrap());
-
-        EntityHandle::invoke_pre_destructor(handle, w);
-
-        let arch = Self::arena_mut(w).arena.remove_now(slot_idx).archetype;
-
-        let comp_set = Self::arena(w).archetypes.component_set(arch).clone();
-
-        for comp in comp_set.iter() {
-            (comp.detach_during_delete)(handle, w);
-        }
-    }
-
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        Self::arena(w).arena.get(handle.raw())
+        w.arena::<Self>().arena.get(handle.raw())
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        Self::arena_mut(w).arena.get_mut(handle.raw())
+        w.arena_mut::<Self>().arena.get_mut(handle.raw())
     }
 
-    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
-        Self::arena(w)
+    fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>> {
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
+
+        arena
             .arena
-            .upgrade(Self::manager(w), handle.raw())
+            .upgrade(manager, handle.raw())
             .map(|keep_alive| Strong::new(handle, keep_alive))
     }
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-        Self::arena(w)
+        w.arena::<Self>()
             .arena
             .slot_to_handle(slot_idx)
             .map(EntityHandle::wrap)
@@ -268,7 +280,7 @@ impl ObjectArena for EntityArena {
         }
 
         let arch = handle.r(w).archetype;
-        let arch_set = Self::arena(w).archetypes.component_set(arch);
+        let arch_set = w.arena::<Self>().archetypes.component_set(arch);
 
         if !f.alternate() {
             let mut f = f.debug_tuple("");
@@ -338,7 +350,7 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
     fn try_entity(self, w: Wr) -> Option<EntityHandle> {
         assert!(self.is_alive(w));
 
-        ComponentArena::<T::Object>::arena(w).annotations[self.raw().slot() as usize].entity
+        w.arena::<ComponentArena<T::Object>>().annotations[self.raw().slot() as usize].entity
     }
 
     fn entity(self, w: Wr) -> EntityHandle {
@@ -362,7 +374,7 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
         assert!(self.is_alive(w));
 
         // Update annotation entry
-        let state = ComponentArena::<Self::Object>::arena_mut(w);
+        let state = w.arena_mut::<ComponentArena<Self::Object>>();
 
         let entity = state.annotations[self.raw().slot() as usize].entity.take();
 
@@ -374,7 +386,8 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
 
         // Update archetype
         let old_arch = entity.r(w).archetype;
-        let new_arch = EntityArena::arena_mut(w)
+        let new_arch = w
+            .arena_mut::<EntityArena>()
             .archetypes
             .lookup_remove(old_arch, ComponentId::of::<Self::Object>());
 
@@ -385,7 +398,7 @@ impl<T: Handle<Object: Component>> ComponentHandle for T {
 #[derive(Debug)]
 #[derive_where(Default)]
 pub struct ComponentArena<T: Object> {
-    arena: Arena<T>,
+    arena: DefaultObjectArena<T>,
     annotations: Vec<ComponentSlot>,
     entity_map: FxHashMap<EntityHandle, Strong<T::Handle>>,
 }
@@ -397,9 +410,20 @@ struct ComponentSlot {
 
 impl<T: Component> ObjectArenaSimpleSpawn for ComponentArena<T> {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
-        let (state, manager) = Self::arena_and_manager_mut(w);
+        let (state, manager) = w.arena_and_manager_mut::<Self>();
 
-        let (handle, keep_alive) = state.arena.insert(manager, Self::despawn, value);
+        let (handle, keep_alive) = state.arena.spawn(
+            manager,
+            |handle, w| {
+                let handle = T::Handle::from_raw(handle);
+
+                <T::Handle>::invoke_pre_destructor(handle, w);
+
+                handle.detach(w);
+                w.arena_mut::<Self>().arena.despawn(handle.raw());
+            },
+            value,
+        );
 
         state
             .annotations
@@ -413,32 +437,25 @@ impl<T: Component> ObjectArena for ComponentArena<T> {
     type Object = T;
     type Handle = T::Handle;
 
-    fn despawn(slot_idx: u32, w: W) {
-        let handle = T::Handle::from_slot(slot_idx, w);
-
-        <T::Handle>::invoke_pre_destructor(handle, w);
-
-        handle.detach(w);
-        drop(Self::arena_mut(w).arena.remove_now(slot_idx));
-    }
-
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        Self::arena(w).arena.get(handle.raw())
+        w.arena::<Self>().arena.get(handle.raw())
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        Self::arena_mut(w).arena.get_mut(handle.raw())
+        w.arena_mut::<Self>().arena.get_mut(handle.raw())
     }
 
-    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
-        Self::arena(w)
+    fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>> {
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
+
+        arena
             .arena
-            .upgrade(Self::manager(w), handle.raw())
+            .upgrade(manager, handle.raw())
             .map(|keep_alive| Strong::new(handle, keep_alive))
     }
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-        Self::arena(w)
+        w.arena::<Self>()
             .arena
             .slot_to_handle(slot_idx)
             .map(Self::Handle::from_raw)
@@ -579,13 +596,13 @@ impl ComponentId {
                 type_id: TypeId::of::<T>,
                 type_name: type_name::<T>,
                 detach_during_delete: |entity, w| {
-                    let state = ComponentArena::<T>::arena_mut(w);
+                    let state = w.arena_mut::<ComponentArena<T>>();
 
                     let comp = state.entity_map.remove(&entity).unwrap();
 
                     state.annotations[comp.raw().slot() as usize].entity = None;
                 },
-                get_debug: |entity, w| ComponentArena::<T>::arena(w).entity_map[&entity].r(w),
+                get_debug: |entity, w| w.arena::<ComponentArena<T>>().entity_map[&entity].r(w),
                 enumerate_traits: T::enumerate_traits,
             };
         }

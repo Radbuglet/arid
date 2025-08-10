@@ -5,8 +5,8 @@ use derive_where::derive_where;
 use late_struct::LateField;
 
 use crate::{
-    Arena, ErasedHandle, KeepAliveIndex, RawHandle, Strong, W, WorldDebug, WorldKeepAliveUserdata,
-    Wr, world_ns,
+    Arena, ErasedHandle, KeepAlive, KeepAliveIndex, RawHandle, Strong, W, WorldDebug,
+    WorldKeepAliveManager, WorldKeepAliveUserdata, Wr, world_ns,
 };
 
 // === rich_fmt === //
@@ -97,25 +97,94 @@ impl<T> fmt::Debug for DefaultObjectArena<T> {
     }
 }
 
+impl<T> DefaultObjectArena<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn spawn(
+        &mut self,
+        manager: &mut WorldKeepAliveManager,
+        destructor: fn(RawHandle, W),
+        value: T,
+    ) -> (RawHandle, KeepAlive) {
+        let handle = self.arena.insert(value);
+        let keep_alive = manager.allocate(WorldKeepAliveUserdata { destructor, handle });
+
+        self.resize_keep_alive();
+        self.keep_alive[handle.slot() as usize] = keep_alive.index();
+
+        (handle, keep_alive)
+    }
+
+    pub fn despawn(&mut self, handle: RawHandle) -> Option<T> {
+        let value = self.arena.remove(handle);
+        self.resize_keep_alive();
+
+        value
+    }
+
+    pub fn slot_to_handle(&self, slot_idx: u32) -> Option<RawHandle> {
+        self.arena.slot_to_handle(slot_idx)
+    }
+
+    pub fn upgrade(
+        &mut self,
+        manager: &mut WorldKeepAliveManager,
+        handle: RawHandle,
+    ) -> Option<KeepAlive> {
+        _ = self.arena.get(handle)?;
+
+        let keep_alive = self.keep_alive[handle.slot() as usize];
+        let keep_alive = manager.upgrade(keep_alive);
+
+        Some(keep_alive)
+    }
+
+    pub fn get(&self, handle: RawHandle) -> Option<&T> {
+        self.arena.get(handle)
+    }
+
+    pub fn get_mut(&mut self, handle: RawHandle) -> Option<&mut T> {
+        self.arena.get_mut(handle)
+    }
+
+    pub fn len(&self) -> u32 {
+        self.arena.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.arena.is_empty()
+    }
+
+    fn resize_keep_alive(&mut self) {
+        if self.keep_alive.len() == self.arena.len() as usize {
+            return;
+        }
+
+        self.keep_alive
+            .resize(self.arena.len() as usize, KeepAliveIndex::MAX);
+    }
+}
+
 impl<T> ObjectArenaSimpleSpawn for DefaultObjectArena<T>
 where
     T: Object<Arena = Self> + fmt::Debug,
 {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
         let (arena, manager) = w.arena_and_manager_mut::<Self>();
-        let handle = arena.arena.insert(value);
-        let keep_alive = manager.allocate(WorldKeepAliveUserdata {
-            destructor: Self::despawn,
-            handle,
-        });
 
-        if arena.keep_alive.len() <= handle.slot() as usize {
-            arena
-                .keep_alive
-                .resize(handle.slot() as usize + 1, KeepAliveIndex::MAX);
-        }
+        let (handle, keep_alive) = arena.spawn(
+            manager,
+            |handle, w| {
+                let handle = <T::Handle>::from_raw(handle);
 
-        arena.keep_alive[handle.slot() as usize] = keep_alive.index();
+                <T::Handle>::invoke_pre_destructor(handle, w);
+
+                w.arena_mut::<Self>().despawn(handle.raw());
+            },
+            value,
+        );
 
         Strong::new(Self::Handle::from_raw(handle), keep_alive)
     }
@@ -129,26 +198,23 @@ where
     type Handle = T::Handle;
 
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        w.arena::<Self>().arena.get(handle.raw())
+        w.arena::<Self>().get(handle.raw())
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        w.arena_mut::<Self>().arena.get_mut(handle.raw())
+        w.arena_mut::<Self>().get_mut(handle.raw())
     }
 
     fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>> {
         let (arena, manager) = w.arena_and_manager_mut::<Self>();
 
-        _ = arena.arena.get(handle.raw())?;
+        let keep_alive = arena.upgrade(manager, handle.raw())?;
 
-        let index = arena.keep_alive[handle.raw().slot() as usize];
-
-        Some(Strong::new(handle, manager.upgrade(index)))
+        Some(Strong::new(handle, keep_alive))
     }
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
         w.arena::<Self>()
-            .arena
             .slot_to_handle(slot_idx)
             .map(T::Handle::from_raw)
     }
@@ -159,19 +225,6 @@ where
         } else {
             f.write_str("<dangling>")
         }
-    }
-}
-
-impl<T> DefaultObjectArena<T>
-where
-    T: Object<Arena = Self> + fmt::Debug,
-{
-    fn despawn(handle: RawHandle, w: W) {
-        let handle = <T::Handle>::from_raw(handle);
-
-        <T::Handle>::invoke_pre_destructor(handle, w);
-
-        w.arena_mut::<Self>().arena.remove(handle.raw());
     }
 }
 

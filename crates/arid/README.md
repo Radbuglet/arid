@@ -167,8 +167,7 @@ let my_counter = MyObject { count: 1 }.spawn(w);
 ```
 
 We can then access the handle's value immutably using the `Handle::r` method and mutably using
-the `Handle::m` method. These methods are short aliases for the more conventionally-named
-`Handle::get` and `Handle::get_mut` methods respectively.
+the `Handle::m` method.
 
 ``` rust
 use arid::Handle as _;
@@ -480,19 +479,30 @@ assert!(counter.try_downcast::<ComplexCounterHandle>().is_some());
 
 ## Custom Arenas
 
-`arid` allows us to define custom arenas to track a given object's instances, which can be
-useful when trying to attach additional metadata to a variety of objects (e.g. widget parent and
-child relationships in a UI framework) or when customizing those objects' deletion routine.
+To provide the user with copyable object handles, `arid` tracks its values in *generational
+arenas*, which can be thought of as very efficient dictionaries from the [`RawHandle`](https://docs.rs/arid/latest/arid/arena/struct.RawHandle.html)s that
+[`Handle`](https://docs.rs/arid/latest/arid/handle/trait.Handle.html)s wrap to the values to which they point. By default, we use the
+[`DefaultObjectArena`](https://docs.rs/arid/latest/arid/handle/struct.DefaultObjectArena.html) arena but the user can provide a custom arena so long as it implements
+the [`ObjectArena`](https://docs.rs/arid/latest/arid/handle/trait.ObjectArena.html) trait. This could come in handy when trying to attach additional metadata to
+a variety of objects (e.g. widget parent and child relationships in a UI framework), when
+customizing those objects' deletion routine, or even when using an alternative data-structure to
+keep track of objects.
 
-To do this, we must first define a new arena structure and put a bare [`Arena`](https://docs.rs/arid/latest/arid/arena/struct.Arena.html) into it. This is
-necessary since only `Arena`s can allocate the raw [`KeepAlive`](https://docs.rs/arid/latest/arid/arena/struct.KeepAlive.html) guards required to construct a
-[`Strong`](https://docs.rs/arid/latest/arid/wrappers/struct.Strong.html) handle.
+This section will be reimplement the `DefaultObjectArena` structure in user-land but introduce
+additional metadata to it—in our case, a fancy new field named `frobs`\! I expect this to be the
+most common way to define new arenas but this is only a pattern and, so long as you can properly
+implement the `ObjectArena` trait, you can do basically anything here.
 
-In addition to the [`ObjectArena`](https://docs.rs/arid/latest/arid/handle/trait.ObjectArena.html) trait we'll soon implement, this structure must also be
-[`Sized`](https://doc.rust-lang.org/stable/core/marker/trait.Sized.html), implement [`Debug`](std::fmt::Debug) and [`Default`](https://doc.rust-lang.org/stable/core/default/trait.Default.html), and live for `'static`.
+Let's start by defining creating a new-type structure to wrap an [`Arena`](https://docs.rs/arid/latest/arid/arena/struct.Arena.html). Each slot actively
+allocated in the arena will have three fields: the actual value, its [`KeepAliveIndex`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAliveIndex.html) so we
+can upgrade a given [`RawHandle`](https://docs.rs/arid/latest/arid/arena/struct.RawHandle.html) to its corresponding [`KeepAlive`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAlive.html), and our custom metadata
+named `frobs`.
+
+The [`ObjectArena`](https://docs.rs/arid/latest/arid/handle/trait.ObjectArena.html) trait requires that our structure be [`Sized`](https://doc.rust-lang.org/stable/core/marker/trait.Sized.html), implement [`Default`](https://doc.rust-lang.org/stable/core/default/trait.Default.html), and
+live for `'static` so we'll derive those traits now.
 
 ``` rust
-use arid::{Arena, Object};
+use arid::{Arena, KeepAliveIndex, Object};
 
 pub struct MyArena<T: Object> {
     arena: Arena<Slot<T>>,
@@ -508,33 +518,60 @@ impl<T: Object> Default for MyArena<T> {
 
 struct Slot<T: Object> {
     value: T,
+    keep_alive: KeepAliveIndex,
     frobs: u32,
 }
 ```
 
 Now, let us implement the [`ObjectArena`](https://docs.rs/arid/latest/arid/handle/trait.ObjectArena.html) trait on the `MyArena` type for objects we wish to
-support. This trait provides the `ObjectArena::arena` and `ObjectArena::arena_mut`
-methods to gain access to the underlying arena instance for a given world and we're expected to
-define how operations such as spawning, deleting, and accessing elements should work. Here's
-some boilerplate for a minimal arena with very little customization:
+support. We can fetch a given arena instance using the `World::arena` and `World::arena_mut`
+methods and the [`KeepAliveManager`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAliveManager.html) used to track [`KeepAlive`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAlive.html)s using `World::manager`,
+`World::manager_mut`, and `World::arena_and_manager_mut`.
+
+Here's some boilerplate for a minimal arena with very little customization:
 
 ``` rust
 use std::fmt;
 
-use arid::{Handle, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, Wr};
+use arid::{Handle, ObjectArena, ObjectArenaSimpleSpawn, Strong, W, WorldKeepAliveUserdata, Wr};
 
 impl<T: Object<Arena = Self>> ObjectArenaSimpleSpawn for MyArena<T>
 where
     T: Object<Arena = Self> + fmt::Debug,
 {
     fn spawn(value: Self::Object, w: W) -> Strong<Self::Handle> {
-        let (arena, manager) = Self::arena_and_manager_mut(w);
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
 
-        let (handle, keep_alive) = arena.arena.insert(manager, Self::despawn, Slot {
+        // Add the value to the arena, obtaining a `RawHandle`.
+        let handle = arena.arena.insert(Slot {
             value,
+            // We'll initialize this after we allocate the slot's `KeepAlive` using the
+            // `RawHandle` we allocate in the current step.
+            keep_alive: KeepAliveIndex::MAX,
             frobs: 0,
         });
 
+        // Create a `KeepAlive` to keep track of our slot.
+        let keep_alive = manager.allocate(WorldKeepAliveUserdata {
+            // The destructor is a function pointer that `World::flush` will call on objects
+            // whose `KeepAlive`s have all expired.
+            destructor: |handle, w| {
+                 let handle = Self::Handle::from_raw(handle);
+
+                 // The user is allowed to define custom destructors for their objects.
+                 // Don't forget to call them!
+                 Self::Handle::invoke_pre_destructor(handle, w);
+
+                 w.arena_mut::<Self>().arena.remove(handle.raw());
+            },
+            handle,
+        });
+
+        // Patch the temporary `keep_alive` in our slot with the new keep alive we just created.
+        arena.arena.get_mut(handle).unwrap().keep_alive = keep_alive.index();
+
+        // We now have a `RawHandle` and a `KeepAlive`, the two components required to create
+        // the `Strong` handle the caller expects!
         Strong::new(Self::Handle::from_raw(handle), keep_alive)
     }
 }
@@ -546,37 +583,35 @@ where
     type Object = T;
     type Handle = T::Handle;
 
-    fn despawn(slot_idx: u32, w: W) {
-        let handle = Self::try_from_slot(slot_idx, w).unwrap();
-        <T::Handle>::invoke_pre_destructor(handle, w);
-
-        Self::arena_mut(w).arena.remove_now(slot_idx);
-    }
-
     fn try_get(handle: Self::Handle, w: Wr<'_>) -> Option<&Self::Object> {
-        Self::arena(w).arena.get(handle.raw()).map(|v| &v.value)
+        w.arena::<Self>().arena.get(handle.raw()).map(|v| &v.value)
     }
 
     fn try_get_mut(handle: Self::Handle, w: W<'_>) -> Option<&mut Self::Object> {
-        Self::arena_mut(w).arena.get_mut(handle.raw()).map(|v| &mut v.value)
+        w.arena_mut::<Self>().arena.get_mut(handle.raw()).map(|v| &mut v.value)
     }
 
-    fn as_strong_if_alive(handle: Self::Handle, w: Wr) -> Option<Strong<Self::Handle>> {
-        Self::arena(w)
-            .arena
-            .upgrade(Self::manager(w), handle.raw())
-            .map(|keep_alive| Strong::new(handle, keep_alive))
+    fn as_strong_if_alive(handle: Self::Handle, w: W) -> Option<Strong<Self::Handle>> {
+        let (arena, manager) = w.arena_and_manager_mut::<Self>();
+
+        // Ensure the handle is still alive.
+        let slot = arena.arena.get(handle.raw())?;
+
+        // If it is, upgrade its `KeepAliveIndex` to a `KeepAlive` guard.
+        let keep_alive = manager.upgrade(slot.keep_alive);
+
+        Some(Strong::new(handle, keep_alive))
     }
 
     fn try_from_slot(slot_idx: u32, w: Wr) -> Option<Self::Handle> {
-        Self::arena(w)
+        w.arena::<Self>()
             .arena
             .slot_to_handle(slot_idx)
-            .map(T::Handle::from_raw)
+            .map(Self::Handle::from_raw)
     }
 
     fn print_debug(f: &mut fmt::Formatter<'_>, handle: Self::Handle, w: Wr) -> fmt::Result {
-        if let Some(alive) = handle.try_get(w) {
+        if let Some(alive) = handle.try_r(w) {
             alive.fmt(f)
         } else {
             f.write_str("<dangling>")
@@ -585,7 +620,7 @@ where
 }
 ```
 
-Finally, we can create extension traits to define new methods on objects within our new arena.
+Finally, let's create extension traits to define new methods on objects within our new arena.
 
 ``` rust
 pub trait MyObject: Object<Arena = MyArena<Self>> + fmt::Debug {}
@@ -600,7 +635,7 @@ pub trait MyHandle: Handle<Object: MyObject> {
 
 impl<T: Handle<Object: MyObject>> MyHandle for T {
     fn frob(self, w: W) {
-        MyArena::<T::Object>::arena_mut(w)
+        w.arena_mut::<MyArena<T::Object>>()
             .arena
             .get_mut(self.raw())
             .expect("value is not alive")
@@ -608,7 +643,7 @@ impl<T: Handle<Object: MyObject>> MyHandle for T {
     }
 
     fn get_frobs(self, w: Wr) -> u32 {
-        MyArena::<T::Object>::arena(w)
+        w.arena::<MyArena<T::Object>>()
             .arena
             .get(self.raw())
             .expect("value is not alive")
@@ -617,8 +652,9 @@ impl<T: Handle<Object: MyObject>> MyHandle for T {
 }
 ```
 
-To define an object within the arena, we can use a second form of the [`object!`](https://docs.rs/arid/latest/arid/macro.object.html) macro to
-specify a custom arena in which the object should be stored:
+And with that, we have a working arena; now, we just need to use it\! To define an object within
+the arena, we can use a second form of the [`object!`](https://docs.rs/arid/latest/arid/macro.object.html) macro to specify a custom arena in which
+the object should be stored:
 
 ``` rust
 use arid::{object, Object as _};
