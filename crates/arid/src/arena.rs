@@ -4,7 +4,7 @@ use derive_where::derive_where;
 
 // === RawArena === //
 
-/// A simple generational object arena.
+/// A generational object arena mapping [`RawHandle`]s to values of type `T`.
 ///
 /// <div class="warning">
 /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a

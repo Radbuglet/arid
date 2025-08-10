@@ -6,6 +6,29 @@ use std::{
 
 // === KeepAliveManager === //
 
+/// Manages a set of [`KeepAlive`]s, notifying when all `KeepAlive`s to a value are dropped.
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
+///
+/// A [`KeepAlive`] is a cloneable reference-counted guard indicating that a given value should not
+/// yet be destroyed. You can create a new `KeepAlive` using [`KeepAliveManager::allocate`]
+/// alongside some userdata of type `T` providing information about what the `KeepAlive` is keeping
+/// alive. You can then scan for values which no longer have `KeepAlive` guards keeping them alive
+/// using [`KeepAliveManager::take_condemned`]. This method identifies the value which has been
+/// destroyed by passing ownership of the slot's userdata back to you.
+///
+/// Each `KeepAlive` has an associated [`KeepAliveIndex`] within its manager which can be obtained
+/// using [`KeepAlive::index`]. Unlike [`RawHandle`](crate::RawHandle)s, `KeepAliveIndex`es may be
+/// reused after they have been condemned.
+///
+/// Mirroring the [world lifecycle semantics](index.html#lifecycle) described in the crate-level
+/// documentation, `KeepAlive`s are not actually marked as dead until `take_condemned` observes them
+/// as being dead. During the time between the last `KeepAlive` to a given value being dropped and
+/// the condemnation being observed by `take_condemned`, you can "resurrect" a given `KeepAlive`
+/// using [`KeepAliveManager::upgrade`] and prevent it from being dropped.
 pub struct KeepAliveManager<T> {
     slots: Vec<KeepAliveManagerSlot<T>>,
     free_slots: Vec<KeepAliveIndex>,
@@ -26,12 +49,6 @@ impl<T> fmt::Debug for KeepAliveManager<T> {
 
 impl<T> Default for KeepAliveManager<T> {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> KeepAliveManager<T> {
-    pub fn new() -> Self {
         let (candidate_sender, candidate_receiver) = mpsc::channel();
 
         Self {
@@ -41,7 +58,10 @@ impl<T> KeepAliveManager<T> {
             candidate_receiver,
         }
     }
+}
 
+impl<T> KeepAliveManager<T> {
+    /// Creates a new [`KeepAlive`] and associates it with the supplied `userdata`.
     pub fn allocate(&mut self, userdata: T) -> KeepAlive {
         if let Some(index) = self.free_slots.pop() {
             let pointee = Arc::new(KeepAlivePointee {
@@ -71,6 +91,11 @@ impl<T> KeepAliveManager<T> {
         KeepAlive(pointee)
     }
 
+    /// Upgrades a [`KeepAliveIndex`] into a [`KeepAlive`].
+    ///
+    /// The `KeepAlive` being pointed to by the specified `KeepAliveIndex` must not yet have been
+    /// observed as condemned by [`KeepAliveManager::take_condemned`] or the behavior will be
+    /// unspecified.
     pub fn upgrade(&mut self, index: KeepAliveIndex) -> KeepAlive {
         let slot = &mut self.slots[index.as_usize()];
         debug_assert!(slot.userdata.is_some());
@@ -88,10 +113,27 @@ impl<T> KeepAliveManager<T> {
         KeepAlive(pointee)
     }
 
+    /// Fetches the userdata associated with a given [`KeepAliveIndex`].
+    ///
+    /// The `KeepAlive` being pointed to by the specified `KeepAliveIndex` must not yet have been
+    /// observed as condemned by [`KeepAliveManager::take_condemned`] or the behavior will be
+    /// unspecified.
     pub fn userdata(&self, index: KeepAliveIndex) -> &T {
         self.slots[index.as_usize()].userdata.as_ref().unwrap()
     }
 
+    /// Polls the `KeepAliveManager` for any values lacking a remaining [`KeepAlive`].
+    ///
+    /// If the function returns `Some`, the returned `KeepAliveIndex` indicates the index which will
+    /// no longer be valid until it is randomly reused by [`KeepAliveManager::allocate`] and the
+    /// returned value `T` matches the `userdata` associated with the `KeepAlive` during the call to
+    /// [`KeepAliveManager::allocate`].
+    ///
+    /// If the function returns `None`, the `KeepAliveManager` currently has no remaining
+    /// `KeepAlive` slots to drop.
+    ///
+    /// This method should be called repeatedly until it returns `None` to ensure that the queue of
+    /// destroyed `KeepAlive`s is processed in a timely manner.
     pub fn take_condemned(&mut self) -> Option<(KeepAliveIndex, T)> {
         while let Ok(candidate) = self.candidate_receiver.try_recv() {
             let slot = &mut self.slots[candidate.as_usize()];
@@ -135,16 +177,34 @@ impl Drop for KeepAlivePointee {
 
 // === KeepAlive === //
 
+/// An index to a not-yet-condemned [`KeepAlive`] in a [`KeepAliveManager`].
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
+///
+/// You can obtain a `KeepAliveIndex` from a `KeepAlive` using the [`KeepAlive::index`] method.
+///
+/// Unlike [`RawHandle`](crate::RawHandle)s, `KeepAliveIndex`es may be reused after they have
+/// been condemned.
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeepAliveIndex(NonZeroU32);
 
 impl KeepAliveIndex {
+    /// The maximum possible `KeepAliveIndex` one could observe. This is not guaranteed to always
+    /// dangle.
     pub const MAX: Self = Self::from_usize((u32::MAX - 1) as usize).unwrap();
 
+    /// Converts the index into a `usize`.
     pub const fn as_usize(self) -> usize {
         (self.0.get() - 1) as usize
     }
 
+    /// Attempts to convert a `usize` into a `KeepAliveIndex`, returning `None` if the index is too
+    /// big.
+    ///
+    /// See also, [`KeepAliveIndex::MAX`].
     pub const fn from_usize(idx: usize) -> Option<Self> {
         let idx = idx.saturating_add(1) as u64;
 
@@ -156,6 +216,19 @@ impl KeepAliveIndex {
     }
 }
 
+/// A cloneable guard keeping some logical value alive.
+///
+/// <div class="warning">
+/// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
+/// custom arena</a>.
+/// </div>
+///
+/// All `KeepAlive`s are managed by at most one [`KeepAliveManager`] and can be obtained by calling
+/// [`KeepAliveManager::allocate`].
+///
+/// Each `KeepAlive` has an associated [`KeepAliveIndex`] within its manager which can be obtained
+/// using [`KeepAlive::index`]. Unlike [`RawHandle`](crate::RawHandle)s, `KeepAliveIndex`es may be
+/// reused after they have been condemned.
 #[derive(Clone)]
 pub struct KeepAlive(Arc<KeepAlivePointee>);
 
@@ -174,6 +247,11 @@ impl PartialEq for KeepAlive {
 }
 
 impl KeepAlive {
+    /// Fetches the `KeepAlive`'s associated `KeepAliveIndex`, which can be used to identify the
+    /// value in calls to [`KeepAliveManager::upgrade`] without having to keep the guard alive.
+    ///
+    /// Note that, unlike [`RawHandle`](crate::RawHandle)s, `KeepAliveIndex`es may be reused after
+    /// they have been condemned.
     pub fn index(&self) -> KeepAliveIndex {
         self.0.index
     }
