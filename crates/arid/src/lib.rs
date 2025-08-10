@@ -671,7 +671,7 @@
 //! most common way to define new arenas but this is only a pattern and, so long as you can properly
 //! implement the `ObjectArena` trait, you can do basically anything here.
 //!
-//! Let's start by defining creating a new-type structure to wrap an [`Arena`]. Each slot actively
+//! Let's start by defining creating a new-type structure to wrap a [`RawArena`]. Each slot actively
 //! allocated in the arena will have three fields: the actual value, its [`KeepAliveIndex`] so we
 //! can upgrade a given [`RawHandle`] to its corresponding [`KeepAlive`], and our custom metadata
 //! named `frobs`.
@@ -680,17 +680,17 @@
 //! live for `'static` so we'll derive those traits now.
 //!
 //! ```
-//! use arid::{Arena, KeepAliveIndex, Object};
+//! use arid::{RawArena, KeepAliveIndex, Object};
 //!
 //! #[derive(Debug)]
 //! pub struct MyArena<T: Object> {
-//!     arena: Arena<Slot<T>>,
+//!     arena: RawArena<Slot<T>>,
 //! }
 //!
 //! impl<T: Object> Default for MyArena<T> {
 //!     fn default() -> Self {
 //!         Self {
-//!             arena: Arena::default(),
+//!             arena: RawArena::default(),
 //!         }
 //!     }
 //! }
@@ -711,17 +711,17 @@
 //! Here's some boilerplate for a minimal arena with very little customization:
 //!
 //! ```
-//! # use arid::{Arena, KeepAliveIndex, Object};
+//! # use arid::{RawArena, KeepAliveIndex, Object};
 //! #
 //! # #[derive(Debug)]
 //! # pub struct MyArena<T: Object> {
-//! #     arena: Arena<Slot<T>>,
+//! #     arena: RawArena<Slot<T>>,
 //! # }
 //! #
 //! # impl<T: Object> Default for MyArena<T> {
 //! #     fn default() -> Self {
 //! #         Self {
-//! #             arena: Arena::default(),
+//! #             arena: RawArena::default(),
 //! #         }
 //! #     }
 //! # }
@@ -824,17 +824,17 @@
 //! Finally, let's create extension traits to define new methods on objects within our new arena.
 //!
 //! ```
-//! # use arid::{Arena, KeepAliveIndex, Object};
+//! # use arid::{RawArena, KeepAliveIndex, Object};
 //! #
 //! # #[derive(Debug)]
 //! # pub struct MyArena<T: Object> {
-//! #     arena: Arena<Slot<T>>,
+//! #     arena: RawArena<Slot<T>>,
 //! # }
 //! #
 //! # impl<T: Object> Default for MyArena<T> {
 //! #     fn default() -> Self {
 //! #         Self {
-//! #             arena: Arena::default(),
+//! #             arena: RawArena::default(),
 //! #         }
 //! #     }
 //! # }
@@ -966,17 +966,17 @@
 //! the object should be stored:
 //!
 //! ```
-//! # use arid::{Arena, KeepAliveIndex, Object};
+//! # use arid::{RawArena, KeepAliveIndex, Object};
 //! #
 //! # #[derive(Debug)]
 //! # pub struct MyArena<T: Object> {
-//! #     arena: Arena<Slot<T>>,
+//! #     arena: RawArena<Slot<T>>,
 //! # }
 //! #
 //! # impl<T: Object> Default for MyArena<T> {
 //! #     fn default() -> Self {
 //! #         Self {
-//! #             arena: Arena::default(),
+//! #             arena: RawArena::default(),
 //! #         }
 //! #     }
 //! # }

@@ -493,7 +493,7 @@ additional metadata to it—in our case, a fancy new field named `frobs`\! I exp
 most common way to define new arenas but this is only a pattern and, so long as you can properly
 implement the `ObjectArena` trait, you can do basically anything here.
 
-Let's start by defining creating a new-type structure to wrap an [`Arena`](https://docs.rs/arid/latest/arid/arena/struct.Arena.html). Each slot actively
+Let's start by defining creating a new-type structure to wrap a [`RawArena`](https://docs.rs/arid/latest/arid/arena/struct.RawArena.html). Each slot actively
 allocated in the arena will have three fields: the actual value, its [`KeepAliveIndex`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAliveIndex.html) so we
 can upgrade a given [`RawHandle`](https://docs.rs/arid/latest/arid/arena/struct.RawHandle.html) to its corresponding [`KeepAlive`](https://docs.rs/arid/latest/arid/keep_alive/struct.KeepAlive.html), and our custom metadata
 named `frobs`.
@@ -502,16 +502,16 @@ The [`ObjectArena`](https://docs.rs/arid/latest/arid/handle/trait.ObjectArena.ht
 live for `'static` so we'll derive those traits now.
 
 ``` rust
-use arid::{Arena, KeepAliveIndex, Object};
+use arid::{RawArena, KeepAliveIndex, Object};
 
 pub struct MyArena<T: Object> {
-    arena: Arena<Slot<T>>,
+    arena: RawArena<Slot<T>>,
 }
 
 impl<T: Object> Default for MyArena<T> {
     fn default() -> Self {
         Self {
-            arena: Arena::default(),
+            arena: RawArena::default(),
         }
     }
 }

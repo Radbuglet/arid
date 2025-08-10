@@ -5,7 +5,7 @@ use derive_where::derive_where;
 use late_struct::LateField;
 
 use crate::{
-    Arena, ErasedHandle, KeepAlive, KeepAliveIndex, RawHandle, Strong, W, WorldDebug,
+    ErasedHandle, KeepAlive, KeepAliveIndex, RawArena, RawHandle, Strong, W, WorldDebug,
     WorldKeepAliveManager, WorldKeepAliveUserdata, Wr, world_ns,
 };
 
@@ -87,7 +87,7 @@ pub trait ObjectArena: 'static + Default {
 
 #[derive_where(Default)]
 pub struct DefaultObjectArena<T> {
-    arena: Arena<T>,
+    arena: RawArena<T>,
     keep_alive: Vec<KeepAliveIndex>,
 }
 
@@ -149,21 +149,17 @@ impl<T> DefaultObjectArena<T> {
         self.arena.get_mut(handle)
     }
 
-    pub fn len(&self) -> u32 {
-        self.arena.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.arena.is_empty()
+    pub fn slot_count(&self) -> u32 {
+        self.arena.slot_count()
     }
 
     fn resize_keep_alive(&mut self) {
-        if self.keep_alive.len() == self.arena.len() as usize {
+        if self.keep_alive.len() == self.arena.slot_count() as usize {
             return;
         }
 
         self.keep_alive
-            .resize(self.arena.len() as usize, KeepAliveIndex::MAX);
+            .resize(self.arena.slot_count() as usize, KeepAliveIndex::MAX);
     }
 }
 
@@ -341,7 +337,7 @@ pub mod object_internals {
 
     pub use {
         super::rich_fmt::format_handle,
-        crate::{Arena, Handle, Object, ObjectArena, RawHandle, W, world_ns::WorldNs},
+        crate::{Handle, Object, ObjectArena, RawArena, RawHandle, W, world_ns::WorldNs},
         bytemuck::TransparentWrapper,
         late_struct::late_field,
         paste::paste,

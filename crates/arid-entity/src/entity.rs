@@ -427,7 +427,7 @@ impl<T: Component> ObjectArenaSimpleSpawn for ComponentArena<T> {
 
         state
             .annotations
-            .resize_with(state.arena.len() as usize, ComponentSlot::default);
+            .resize_with(state.arena.slot_count() as usize, ComponentSlot::default);
 
         Strong::new(T::Handle::from_raw(handle), keep_alive)
     }
