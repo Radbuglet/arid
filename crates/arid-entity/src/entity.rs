@@ -109,7 +109,7 @@ impl EntityHandle {
                 state.annotations[moved.raw().slot() as usize].entity = None;
             }
 
-            state.annotations[self.raw().slot() as usize].entity = Some(self);
+            state.annotations[handle_ref.raw().slot() as usize].entity = Some(self);
         }
 
         // Update archetype
