@@ -1,4 +1,4 @@
-use std::{fmt, hash};
+use std::{fmt, hash, mem};
 
 use bytemuck::TransparentWrapper;
 use derive_where::derive_where;
@@ -14,7 +14,7 @@ use crate::{
 mod rich_fmt {
     use std::{
         any::{TypeId, type_name},
-        cell::UnsafeCell,
+        cell::RefCell,
         fmt::{self, Debug},
     };
 
@@ -25,24 +25,22 @@ mod rich_fmt {
     use super::Handle;
 
     thread_local! {
-        static REENTRANT_DEBUGS: UnsafeCell<FxHashSet<(RawHandle, TypeId)>> =
-            const { UnsafeCell::new(FxHashSet::with_hasher(FxBuildHasher) )};
+        static REENTRANT_DEBUGS: RefCell<FxHashSet<(RawHandle, TypeId)>> =
+            const { RefCell::new(FxHashSet::with_hasher(FxBuildHasher) )};
     }
 
     #[must_use]
     fn reentrant_debug_guard<T: Handle>(handle: T) -> Option<impl Sized> {
-        let was_inserted = REENTRANT_DEBUGS.with(|set| {
-            unsafe { &mut *set.get() }.insert((handle.raw(), TypeId::of::<T::Object>()))
-        });
+        let was_inserted = REENTRANT_DEBUGS
+            .with_borrow_mut(|set| set.insert((handle.raw(), TypeId::of::<T::Object>())));
 
         if !was_inserted {
             return None;
         }
 
         Some(scopeguard::guard((), move |()| {
-            REENTRANT_DEBUGS.with(|set| {
-                unsafe { &mut *set.get() }.remove(&(handle.raw(), TypeId::of::<T::Object>()))
-            });
+            REENTRANT_DEBUGS
+                .with_borrow_mut(|set| set.remove(&(handle.raw(), TypeId::of::<T::Object>())));
         }))
     }
 
@@ -356,6 +354,17 @@ pub trait Handle:
     + ErasedHandle
     + TransparentWrapper<RawHandle>
 {
+    /// A [`Handle`] which is always dangling.
+    const DANGLING: Self = {
+        assert!(mem::size_of::<RawHandle>() == mem::size_of::<Self>());
+        assert!(mem::align_of::<RawHandle>() == mem::align_of::<Self>());
+
+        unsafe {
+            // Safety: provided by `TransparentWrapper<RawHandle>` bound.
+            *(&RawHandle::DANGLING as *const RawHandle as *const Self)
+        }
+    };
+
     /// The type of the [`Object`] associated with the `Handle`.
     type Object: Object<Handle = Self>;
 

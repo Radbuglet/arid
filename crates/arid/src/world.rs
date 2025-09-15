@@ -179,7 +179,7 @@ late_field!(WorldKeepAliveManager[world_ns::WorldNs]);
 /// This is likely only relevant to you if you are <a href="index.html#custom-arenas">implementing a
 /// custom arena</a>.
 /// </div>
-#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone)]
 pub struct WorldKeepAliveUserdata {
     /// The function pointer called by [`World::flush`] when it deletes this slot.
     pub destructor: fn(handle: RawHandle, w: W),
