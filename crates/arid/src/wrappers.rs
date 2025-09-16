@@ -71,6 +71,12 @@ impl<T: Handle> Strong<T> {
     pub fn as_weak(&self) -> T {
         self.handle
     }
+
+    /// Obtains both a `Strong` reference to a value and a regular [`Handle`].
+    pub fn split(self) -> (Strong<T>, T) {
+        let weak = self.as_weak();
+        (self, weak)
+    }
 }
 
 // === MayDangle === //
@@ -94,8 +100,11 @@ impl<T: Handle> From<T> for MayDangle<T> {
 }
 
 impl<T: Handle> MayDangle<T> {
+    /// A [`MayDangle`] handle to a value which is guaranteed to dangle.
+    pub const DANGLING: Self = Self::new(T::DANGLING);
+
     /// Wraps `handle` into a `MayDangle`.
-    pub fn new(handle: T) -> Self {
+    pub const fn new(handle: T) -> Self {
         Self { handle }
     }
 

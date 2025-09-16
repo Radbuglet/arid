@@ -165,6 +165,7 @@ impl ArchetypeStore {
         self.lookup::<ExtendLookupMode>(base, with)
     }
 
+    #[expect(unused)]
     pub fn lookup_remove(&mut self, base: ArchetypeId, without: ComponentId) -> ArchetypeId {
         self.lookup::<RemoveLookupMode>(base, without)
     }
