@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 arid = { version = "0.1.0", path = "../arid" }
+bytemuck = "1.23.2"
 derive-where = "1.3.0"
 hashbrown = "0.15.4"
 index_vec = "0.1.4"

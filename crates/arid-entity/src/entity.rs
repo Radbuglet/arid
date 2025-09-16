@@ -12,8 +12,8 @@ use std::{
 
 use arid::{
     Erased, ErasedHandle, Handle, MayDangle, Object, ObjectArena, RawArena, Strong, W, Wr, object,
-    object_internals::TransparentWrapper,
 };
+use bytemuck::TransparentWrapper as _;
 use derive_where::derive_where;
 use hashbrown::hash_map;
 
