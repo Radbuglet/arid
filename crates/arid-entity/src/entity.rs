@@ -77,6 +77,14 @@ impl EntityHandle {
         me
     }
 
+    pub fn set_label(self, label: impl Into<Cow<'static, str>>, w: W) {
+        if let Some(handle) = self.try_get::<DebugLabelHandle>(w) {
+            handle.m(w).0 = label.into();
+        } else {
+            DebugLabel(label.into()).attach(self, w);
+        }
+    }
+
     pub fn parent(self, w: Wr) -> Option<EntityHandle> {
         self.r(w).parent.get(w)
     }
